@@ -38,6 +38,7 @@ Upstream = "https://github.com/openai/human-eval"
 
 [project.scripts]
 evaluate_functional_correctness = "human_eval.evaluate_functional_correctness:main"
+verifybench = "codeeval.cli:main"
 
 [dependency-groups]
 dev = [

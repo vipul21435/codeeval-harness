@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 UV ?= uv
 
-.PHONY: help install lint format typecheck test test-fast coverage check ci clean
+.PHONY: help install demo lint format typecheck test test-fast coverage check ci clean
 
 help:  ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -9,6 +9,9 @@ help:  ## Show the available targets
 install:  ## Create the uv environment with dev tools and install the git hooks
 	$(UV) sync
 	$(UV) run pre-commit install
+
+demo:  ## Validate the HumanEval mini suite and score it with pass@k (offline, under a minute)
+	$(UV) run python -m codeeval demo
 
 lint:  ## Lint and check formatting with ruff
 	$(UV) run ruff check .
