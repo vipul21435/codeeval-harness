@@ -310,53 +310,24 @@ def test_env_example_values_are_the_defaults(tmp_path: Path) -> None:
 # --- the upstream evaluator reads its defaults from the settings ------------
 
 
-def _stub_evaluation(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Replace the worker pool and the sample runner; record what they were given."""
-    seen: dict[str, Any] = {}
-
-    def fake_check(
-        problem: dict[str, Any], completion: str, timeout: float, completion_id: int | None = None
-    ) -> dict[str, Any]:
-        seen["timeout"] = timeout
-        return {
-            "task_id": problem["task_id"],
-            "completion_id": completion_id,
-            "passed": True,
-            "result": "passed",
-        }
-
-    class RecordingExecutor(ThreadPoolExecutor):
-        def __init__(self, max_workers: int | None = None, **kwargs: Any) -> None:
-            seen["workers"] = max_workers
-            super().__init__(max_workers=max_workers, **kwargs)
-
-    monkeypatch.setattr(evaluation, "check_correctness", fake_check)
-    monkeypatch.setattr(evaluation, "ThreadPoolExecutor", RecordingExecutor)
-    return seen
-
-
 def test_evaluate_reads_workers_and_timeout_from_settings(
-    monkeypatch: pytest.MonkeyPatch, example_problem_file: Path, example_samples_file: Path
+    stubbed_evaluation: dict[str, Any], example_problem_file: Path, example_samples_file: Path
 ) -> None:
-    seen = _stub_evaluation(monkeypatch)
-
     with override_settings(workers=7, sample_timeout=0.25):
         pass_at_k = evaluation.evaluate_functional_correctness(
             example_samples_file, k=[1], problem_file=example_problem_file
         )
 
-    assert seen == {"workers": 7, "timeout": 0.25}
+    assert stubbed_evaluation == {"workers": 7, "timeout": 0.25}
     assert pass_at_k == {"pass@1": 1.0}
 
 
 def test_explicit_arguments_beat_settings(
-    monkeypatch: pytest.MonkeyPatch, example_problem_file: Path, example_samples_file: Path
+    stubbed_evaluation: dict[str, Any], example_problem_file: Path, example_samples_file: Path
 ) -> None:
-    seen = _stub_evaluation(monkeypatch)
-
     with override_settings(workers=7, sample_timeout=0.25):
         evaluation.evaluate_functional_correctness(
             example_samples_file, k=[1], n_workers=2, timeout=1.5, problem_file=example_problem_file
         )
 
-    assert seen == {"workers": 2, "timeout": 1.5}
+    assert stubbed_evaluation == {"workers": 2, "timeout": 1.5}

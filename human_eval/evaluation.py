@@ -1,4 +1,5 @@
 import itertools
+import logging
 import os
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
@@ -13,6 +14,8 @@ import tqdm
 from codeeval.settings import get_settings
 from human_eval.data import HUMAN_EVAL, PathLike, read_problems, stream_jsonl, write_jsonl
 from human_eval.execution import check_correctness
+
+log = logging.getLogger(__name__)
 
 
 def estimate_pass_at_k(
@@ -93,6 +96,17 @@ def evaluate_functional_correctness(
         if missing:
             raise ValueError(f"Some problems are not attempted: {missing}")
 
+        log.info(
+            "evaluating samples",
+            extra={
+                "sample_file": os.fspath(sample_file),
+                "problem_file": os.fspath(problem_file),
+                "n_samples": n_samples,
+                "n_problems": len(problems),
+                "n_workers": n_workers,
+                "timeout": timeout,
+            },
+        )
         print("Running test suites...")
         for future in tqdm.tqdm(as_completed(futures), total=len(futures)):
             result = future.result()
@@ -127,5 +141,9 @@ def evaluate_functional_correctness(
     out_file = f"{os.fspath(sample_file)}_results.jsonl"
     print(f"Writing results to {out_file}...")
     write_jsonl(out_file, tqdm.tqdm(combine_results(), total=n_samples))
+    log.info(
+        "wrote results",
+        extra={"results_file": out_file, "n_samples": n_samples, "pass_at_k": pass_at_k},
+    )
 
     return pass_at_k

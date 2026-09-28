@@ -52,6 +52,10 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
   environment variable or `.env` entry, validated up front by pydantic-settings
   with a `ConfigError` that names the offending variable; the evaluator's
   `--n_workers` and `--timeout` default to them.
+- Structured logging (`codeeval.log`): one JSON object per record on stderr
+  with `timestamp`, `level`, `logger`, `message` and extras such as `run_id`
+  and `task_id`, a plain text fallback, and `bind_context()` to stamp a block
+  of records; the CLI configures it from the settings.
 
 ## Installation
 
@@ -166,6 +170,29 @@ naming each offending variable. It loads the settings once per process;
 the tests pin a configuration. `evaluate_functional_correctness` reads
 `--n_workers` and `--timeout` from the settings when they are not given.
 
+## Logging
+
+The CLI writes one JSON object per log record to stderr: `timestamp`,
+`level`, `logger`, `message`, then extras such as `run_id`, `task_id` or
+`n_samples`. `VERIFYBENCH_LOG_FORMAT=text` switches to a one-line text format
+and `VERIFYBENCH_LOG_LEVEL` sets the threshold. Your own code calls
+`configure_logging()` once at start-up; `bind_context()` stamps every record
+emitted inside the block, including records logged by libraries:
+
+```python
+import logging
+
+from codeeval.log import bind_context, configure_logging
+
+configure_logging()
+with bind_context(run_id="run-42"):
+    logging.getLogger("codeeval.demo").info("graded", extra={"task_id": "HumanEval/0"})
+```
+
+```
+{"timestamp": "2026-09-28T19:02:11.481Z", "level": "INFO", "logger": "codeeval.demo", "message": "graded", "run_id": "run-42", "task_id": "HumanEval/0"}
+```
+
 ## Development
 
 ```
@@ -180,8 +207,9 @@ Layout:
 - `human_eval/` - the upstream package: dataset loading (with
   `HumanEval.jsonl.gz` in `human_eval/data/`), per-sample execution, the
   pass@k estimator and the `evaluate_functional_correctness` CLI.
-- `codeeval/` - the harness package: `errors` (the exception hierarchy) and
-  `settings` (typed configuration); further modules land slice by slice.
+- `codeeval/` - the harness package: `errors` (the exception hierarchy),
+  `settings` (typed configuration) and `log` (structured logging); further
+  modules land slice by slice.
 - `data/` - the example problem and samples used in this README and the tests.
 - `tests/` - pytest suite; tests marked `slow` spawn worker processes.
 

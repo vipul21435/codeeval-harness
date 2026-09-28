@@ -7,10 +7,12 @@ re-import the caller's ``__main__``, so scripts that call the evaluator at
 module level work too.
 """
 
+import uuid
 from collections.abc import Sequence
 
 import fire
 
+from codeeval.log import bind_context, configure_logging
 from human_eval.data import HUMAN_EVAL
 from human_eval.evaluation import evaluate_functional_correctness
 
@@ -43,13 +45,15 @@ def entry_point(
     ``--n_workers`` and ``--timeout`` default to the ``VERIFYBENCH_WORKERS``
     and ``VERIFYBENCH_SAMPLE_TIMEOUT`` settings (4 and 3.0 seconds).
     """
-    results = evaluate_functional_correctness(
-        sample_file, parse_k(k), n_workers, timeout, problem_file
-    )
+    with bind_context(run_id=uuid.uuid4().hex[:12]):
+        results = evaluate_functional_correctness(
+            sample_file, parse_k(k), n_workers, timeout, problem_file
+        )
     print(results)
 
 
 def main() -> None:
+    configure_logging()
     fire.Fire(entry_point)
 
 
