@@ -2,10 +2,12 @@ import gzip
 import json
 import os
 from collections.abc import Iterable, Iterator
+from importlib.resources import files
 from typing import Any
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-HUMAN_EVAL = os.path.join(ROOT, "..", "data", "HumanEval.jsonl.gz")
+# The dataset ships inside this package so that it is present after a wheel
+# install, not only in a source checkout.
+HUMAN_EVAL = str(files("human_eval.data").joinpath("HumanEval.jsonl.gz"))
 
 PathLike = str | os.PathLike[str]
 

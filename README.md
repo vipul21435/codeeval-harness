@@ -40,6 +40,10 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
   work around `os.getcwd = None`), and blocks `ctypes`.
 - `--k=1,2,4` no longer crashes (`fire` passes it as a tuple), and pass@k values
   are plain floats rather than `np.float64`.
+- The HumanEval dataset ships inside the package (`human_eval/data/`), so
+  `read_problems()` and the CLI's default `--problem_file` work after a wheel
+  install. Upstream resolved it relative to the source checkout, which broke
+  `pip install .`.
 - Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
   by a pytest suite that reproduces the documented example numbers.
 
@@ -53,6 +57,9 @@ $ git clone https://github.com/vipul21435/codeeval-harness
 $ cd codeeval-harness
 $ make install    # uv sync + pre-commit install
 ```
+
+A plain `pip install .` (or installing the wheel from `uv build`) works too;
+the HumanEval dataset ships inside the package.
 
 ## Usage
 
@@ -139,11 +146,12 @@ $ make format       # auto-fix lint findings and reformat
 
 Layout:
 
-- `human_eval/` - the upstream package: dataset loading, per-sample execution,
-  the pass@k estimator and the `evaluate_functional_correctness` CLI.
+- `human_eval/` - the upstream package: dataset loading (with
+  `HumanEval.jsonl.gz` in `human_eval/data/`), per-sample execution, the
+  pass@k estimator and the `evaluate_functional_correctness` CLI.
 - `codeeval/` - the harness package (currently the version only; modules land
   slice by slice).
-- `data/` - `HumanEval.jsonl.gz` plus the example problem and samples.
+- `data/` - the example problem and samples used in this README and the tests.
 - `tests/` - pytest suite; tests marked `slow` spawn worker processes.
 
 Copy `.env.example` to `.env` if you want to configure a hosted model provider

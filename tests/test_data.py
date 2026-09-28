@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+import human_eval.data
 from human_eval.data import HUMAN_EVAL, read_problems, stream_jsonl, write_jsonl
 
 PROBLEM_KEYS = {"task_id", "prompt", "canonical_solution", "test", "entry_point"}
@@ -21,8 +22,11 @@ def test_bundled_humaneval_dataset_loads() -> None:
         assert f"def {problem['entry_point']}(" in problem["prompt"]
 
 
-def test_default_dataset_path_exists() -> None:
+def test_default_dataset_ships_inside_the_package() -> None:
+    # Lives next to human_eval/data/__init__.py so that a wheel install has it;
+    # test_package.py checks the built wheel itself.
     assert Path(HUMAN_EVAL).is_file()
+    assert Path(HUMAN_EVAL).parent == Path(human_eval.data.__file__).parent
 
 
 def test_read_problems_accepts_path_objects(example_problem_file: Path) -> None:
