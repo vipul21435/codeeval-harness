@@ -1,46 +1,69 @@
-# HumanEval: Hand-Written Evaluation Set 
+# codeeval-harness
 
-This is an evaluation harness for the HumanEval problem solving dataset
-described in the paper "[Evaluating Large Language Models Trained on
-Code](https://arxiv.org/abs/2107.03374)".
+An evaluation harness for LLM-generated code, built on OpenAI's
+[human-eval](https://github.com/openai/human-eval): the HumanEval dataset and
+the pass@k evaluator from the paper "[Evaluating Large Language Models Trained
+on Code](https://arxiv.org/abs/2107.03374)".
+
+The upstream `human_eval` package stays importable and keeps its evaluation
+semantics. This fork modernizes the packaging and tooling around it and grows a
+`codeeval` package on top. Planned, in order:
+
+- sandboxed, dockerized execution of model-generated code (digest-pinned images)
+- pytest graders with fail-to-pass verification
+- pass@k and per-task reports, results stored in SQLite
+- LLM-as-judge grading against a rubric
+- a Typer CLI and a FastAPI service
+- a deterministic stub model provider so the whole pipeline runs offline
+
+## Changes from upstream so far
+
+- `pyproject.toml` with a [hatchling](https://hatch.pypa.io/) build and
+  dependencies locked with [uv](https://docs.astral.sh/uv/) on Python 3.12.
+  The `pkg_resources`-based `setup.py`, which broke editable installs on
+  current setuptools, is gone.
+- The `evaluate_functional_correctness` CLI works on macOS. With the `spawn`
+  multiprocessing start method (the default there) each worker re-imports the
+  parent's `__main__`; upstream ran the CLI at import time, so every worker
+  re-ran it and died, and the parent failed with `EOFError`. The CLI now lives
+  behind a `__main__` guard and `execution.py` selects `spawn` explicitly on
+  every platform.
+- `--k=1,2,4` no longer crashes (`fire` passes it as a tuple), and pass@k values
+  are plain floats rather than `np.float64`.
+- Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
+  by a pytest suite that reproduces the documented example numbers.
 
 ## Installation
 
-Make sure to use python 3.7 or later:
-```
-$ conda create -n codex python=3.7
-$ conda activate codex
-```
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/); it
+installs Python 3.12 itself if needed.
 
-Check out and install this repository:
 ```
-$ git clone https://github.com/openai/human-eval
-$ pip install -e human-eval
+$ git clone https://github.com/vipul21435/codeeval-harness
+$ cd codeeval-harness
+$ make install    # uv sync + pre-commit install
 ```
 
 ## Usage
 
-**This program exists to run untrusted model-generated code. Users are strongly
-encouraged not to do so outside of a robust security sandbox. The [execution
-call](https://github.com/openai/human-eval/blob/master/human_eval/execution.py#L48-L58)
-in `execution.py` is deliberately commented out to ensure users read this
-disclaimer before running code in a potentially unsafe manner. See the comment in
-`execution.py` for more information and instructions.**
+**This program runs untrusted model-generated code.** Each sample executes in
+a separate subprocess with a `reliability_guard` that disables the most
+destructive functions, but that is not a security sandbox. Run evaluations
+inside a container or VM you are prepared to lose; a dockerized sandbox is the
+next item on the roadmap.
 
-After following the above instructions to enable execution, generate samples
-and save them in the following JSON Lines (jsonl) format, where each sample is
-formatted into a single line like so:
+Generate samples and save them as JSON Lines, one sample per line:
+
 ```
 {"task_id": "Corresponding HumanEval task ID", "completion": "Completion only without the prompt"}
 ```
-We provide `example_problem.jsonl` and `example_solutions.jsonl` under `data`
-to illustrate the format and help with debugging.
 
-Here is nearly functional example code (you just have to provide
-`generate_one_completion` to make it work) that saves generated completions to
-`samples.jsonl`.
-```
-from human_eval.data import write_jsonl, read_problems
+`data/example_problem.jsonl` and `data/example_samples.jsonl` illustrate the
+format. The snippet below writes completions for every task; supply your own
+`generate_one_completion`:
+
+```python
+from human_eval.data import read_problems, write_jsonl
 
 problems = read_problems()
 
@@ -53,9 +76,10 @@ samples = [
 write_jsonl("samples.jsonl", samples)
 ```
 
-To evaluate the samples, run
+Evaluate them with:
+
 ```
-$ evaluate_functional_correctness samples.jsonl
+$ uv run evaluate_functional_correctness samples.jsonl
 Reading samples...
 32800it [00:01, 23787.50it/s]
 Running test suites...
@@ -64,31 +88,46 @@ Writing results to samples.jsonl_results.jsonl...
 100%|...| 32800/32800 [00:00<00:00, 42876.84it/s]
 {'pass@1': ..., 'pass@10': ..., 'pass@100': ...}
 ```
-This script provides more fine-grained information in a new file ending in
-`<input_path>_results.jsonl`. Each row now contains whether the completion
-`passed` along with the execution `result` which is one of "passed", "timed
-out", or "failed".
 
-As a quick sanity-check, the example samples should yield 0.5 pass@1.
+A file ending in `<input_path>_results.jsonl` is written next to the input;
+each row carries the original sample plus `passed` and the execution `result`,
+one of `"passed"`, `"timed out"` or `"failed: <reason>"`.
+
+As a sanity check, the bundled example samples give pass@1 = 0.5 (and, with
+`--k=1,2,4`, pass@2 = 0.8 and pass@4 = 1.0):
+
 ```
-$ evaluate_functional_correctness data/example_samples.jsonl --problem_file=data/example_problem.jsonl
+$ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_file=data/example_problem.jsonl --k=1,2,4
 Reading samples...
-6it [00:00, 3397.11it/s]
-Running example suites...
-100%|...| 6/6 [00:03<00:00,  1.96it/s]
+Running test suites...
 Writing results to data/example_samples.jsonl_results.jsonl...
-100%|...| 6/6 [00:00<00:00, 6148.50it/s]
-{'pass@1': 0.4999999999999999}
+{'pass@1': 0.4999999999999999, 'pass@2': 0.8, 'pass@4': 1.0}
 ```
 
-Because there is no unbiased way of estimating pass@k when there are fewer
-samples than k, the script does not evaluate pass@k for these cases. To
-evaluate with other k values, pass `--k=<comma-separated-values-here>`. For
-other options, see
+There is no unbiased estimate of pass@k with fewer than k samples per task, so
+such k are skipped. See `uv run evaluate_functional_correctness --help` for the
+remaining options (`--n_workers`, `--timeout`, `--problem_file`).
+
+## Development
+
 ```
-$ evaluate_functional_correctness --help
+$ make check        # ruff check, ruff format --check, mypy --strict, pytest
+$ make test-fast    # skip the tests that spawn subprocesses
+$ make coverage     # pytest with branch coverage
+$ make format       # auto-fix lint findings and reformat
 ```
-However, we recommend that you use the default values for the rest.
+
+Layout:
+
+- `human_eval/` - the upstream package: dataset loading, per-sample execution,
+  the pass@k estimator and the `evaluate_functional_correctness` CLI.
+- `codeeval/` - the harness package (currently the version only; modules land
+  slice by slice).
+- `data/` - `HumanEval.jsonl.gz` plus the example problem and samples.
+- `tests/` - pytest suite; tests marked `slow` spawn worker processes.
+
+Copy `.env.example` to `.env` if you want to configure a hosted model provider
+later; nothing in the repository needs credentials.
 
 ## Known Issues
 
@@ -101,7 +140,7 @@ malloc: can't allocate region
 
 ## Citation
 
-Please cite using the following bibtex entry:
+Please cite the upstream paper when using the HumanEval dataset or evaluator:
 
 ```
 @article{chen2021codex,
@@ -113,3 +152,8 @@ Please cite using the following bibtex entry:
   primaryClass={cs.LG}
 }
 ```
+
+## License
+
+MIT. The original code and dataset are Copyright (c) OpenAI; see
+[LICENSE](LICENSE). Changes in this fork are released under the same license.
