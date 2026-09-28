@@ -370,7 +370,7 @@ resample.
 | pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.5 s with 4 workers, i.e. about 80 samples/s (each in a fresh interpreter) |
 | Mock generation, 20 tasks x 4 samples | `time uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl` | 80 samples in 0.50 s wall-clock, interpreter start-up included |
 | Upstream evaluator on those 80 samples | `time uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4` | 1.58 s wall-clock; pass@1 0.65, pass@2 0.883, pass@4 1.0 |
-| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 564 tests in 55.6 s; 99% line and branch coverage (1548 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics`, `codeeval.breakdown` and `codeeval.diff` at 100% |
+| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 569 tests in 67.9 s; 99% line and branch coverage (1565 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics`, `codeeval.breakdown` and `codeeval.diff` at 100% |
 | Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | 22.4 s wall-clock (pip install of the locked dependencies included; Docker Desktop VM with 8 CPUs and 4 GB) |
 | Demo inside the container | `time docker run --rm verifybench:dev` | 28.8 s wall-clock, same 120 grader runs and 40 completions, inside the 4 GB Docker Desktop VM |
 
