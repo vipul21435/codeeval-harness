@@ -266,11 +266,11 @@ class OpenAIBackend:
                 last = f"{type(exc).__name__}: {getattr(exc, 'reason', exc)}"
             else:
                 return self._decode(raw, task_id=task_id, status=status)
-            log.warning(
-                "openai backend retrying",
-                extra={"task_id": task_id, "attempt": attempt + 1, "reason": last},
-            )
             if attempt < self.retries:
+                log.warning(
+                    "openai backend retrying",
+                    extra={"task_id": task_id, "attempt": attempt + 1, "reason": last},
+                )
                 self.sleep(self.backoff * 2**attempt)
         raise ProviderError(
             f"{self.url} failed after {self.retries + 1} attempt(s) for {task_id}: {last}",

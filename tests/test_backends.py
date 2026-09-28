@@ -191,14 +191,39 @@ def test_openai_retries_on_429_and_5xx_then_succeeds(
 
 
 def test_openai_gives_up_after_retries(
-    fake_server: FakeServer, make_client: Callable[..., OpenAIBackend]
+    fake_server: FakeServer,
+    make_client: Callable[..., OpenAIBackend],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     fake_server.script((500, {}), (500, {}))
     client = make_client(retries=1, sleep=lambda _: None)
-    with pytest.raises(ProviderError, match="failed after 2 attempt") as info:
+    with (
+        caplog.at_level("WARNING", logger="codeeval.backends"),
+        pytest.raises(ProviderError, match="failed after 2 attempt") as info,
+    ):
         client.complete("t/0", "p")
     assert info.value.details["attempts"] == 2
     assert info.value.details["reason"] == "HTTP 500"
+    # One retry followed the first failure; the last attempt is not announced as a retry.
+    retrying = [record for record in caplog.records if record.msg == "openai backend retrying"]
+    assert [record.attempt for record in retrying] == [1]  # type: ignore[attr-defined]
+
+
+def test_openai_without_retries_does_not_log_a_retry(
+    fake_server: FakeServer,
+    make_client: Callable[..., OpenAIBackend],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_server.script((503, {}))
+    slept: list[float] = []
+    client = make_client(retries=0, sleep=slept.append)
+    with (
+        caplog.at_level("WARNING", logger="codeeval.backends"),
+        pytest.raises(ProviderError, match="failed after 1 attempt"),
+    ):
+        client.complete("t/0", "p")
+    assert slept == []
+    assert "retrying" not in caplog.text
 
 
 def test_openai_does_not_retry_client_errors(
