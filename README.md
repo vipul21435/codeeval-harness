@@ -14,7 +14,7 @@ that proves every grader rejects a stub and accepts the reference, a converter
 from HumanEval problems to pytest tasks, typed settings, JSON logging, a CLI
 with an offline demo, and a digest-pinned Docker image.
 
-Status: the pieces above are implemented, tested (564 tests, 99% line and
+Status: the pieces above are implemented, tested (570 tests, 99% line and
 branch coverage) and run in CI on every push. The FastAPI service, the SQLite
 results store, the Docker sandbox grader and the submission ledger are not
 built yet; see "What I would do next". No network access and no model API key
@@ -370,9 +370,9 @@ resample.
 | pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.5 s with 4 workers, i.e. about 80 samples/s (each in a fresh interpreter) |
 | Mock generation, 20 tasks x 4 samples | `time uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl` | 80 samples in 0.50 s wall-clock, interpreter start-up included |
 | Upstream evaluator on those 80 samples | `time uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4` | 1.58 s wall-clock; pass@1 0.65, pass@2 0.883, pass@4 1.0 |
-| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 569 tests in 67.9 s; 99% line and branch coverage (1565 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics`, `codeeval.breakdown` and `codeeval.diff` at 100% |
+| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 570 tests in 67.9 s; 99% line and branch coverage (1565 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics`, `codeeval.breakdown` and `codeeval.diff` at 100% |
 | Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | 22.4 s wall-clock (pip install of the locked dependencies included; Docker Desktop VM with 8 CPUs and 4 GB) |
-| Demo inside the container | `time docker run --rm verifybench:dev` | 28.8 s wall-clock, same 120 grader runs and 40 completions, inside the 4 GB Docker Desktop VM |
+| Demo inside the container | `time docker run --rm verifybench:dev` | 32.3 s wall-clock (28.8 s on an earlier run), same 120 grader runs and 40 completions, inside a Docker Desktop VM with 8 CPUs and 4 GB; this number moves with the VM's CPU and memory allocation and with host load, so expect a different figure on another machine |
 
 The task suite is small on purpose: 20 tasks make the demo quick and the
 output readable. `verifybench convert all.jsonl --limit 0` ports all 164
@@ -387,26 +387,26 @@ In order of value:
    backend beside the OpenAI-compatible one, prompt templates per task
    suite, and `generate --workers N` so long suites are sampled in parallel
    with per-task retries recorded on the sample.
-- **Docker sandbox grader.** Honour `VERIFYBENCH_SANDBOX_BACKEND=docker`:
-  run each task's pytest in a digest-pinned container with no network, a
-  read-only root, a pids limit and a memory limit (the compose file already
-  applies these to the demo). That closes the remaining gap in
-  `reliability_guard`.
-- **Reports and regression diffs.** Wire `codeeval.metrics` into a
-  `verifybench report` command that writes a Markdown and JSONL report per
-  run (pass@k with its interval, the category breakdown per task and the
-  regression diff against a baseline file) in Markdown and JSONL.
-- **SQLite results store and an LLM judge with a rubric.** Persist every run
-  (`VERIFYBENCH_DB_PATH` is reserved for it), then add a rubric-driven judge
-  for tasks whose correctness is not a pytest verdict, with judge outputs
-  stored beside the execution results and audited against the graders.
-- **Submission ledger with dedupe and contamination checks.** Hash every
-  completion, flag exact and near duplicates across submissions, and check
-  completions against the reference solutions and known public solutions
-  before a number is reported.
-- **Typer CLI and FastAPI service.** Promote the argparse CLI to Typer with
-  the same commands, and expose `validate`, `run` and `results` over HTTP so
-  a queue of submissions can be graded by a long-running service.
+2. **Docker sandbox grader.** Honour `VERIFYBENCH_SANDBOX_BACKEND=docker`:
+   run each task's pytest in a digest-pinned container with no network, a
+   read-only root, a pids limit and a memory limit (the compose file already
+   applies these to the demo). That closes the remaining gap in
+   `reliability_guard`.
+3. **Reports and regression diffs.** Wire `codeeval.metrics` into a
+   `verifybench report` command that writes a Markdown and JSONL report per
+   run (pass@k with its interval, the category breakdown per task and the
+   regression diff against a baseline file).
+4. **SQLite results store and an LLM judge with a rubric.** Persist every run
+   (`VERIFYBENCH_DB_PATH` is reserved for it), then add a rubric-driven judge
+   for tasks whose correctness is not a pytest verdict, with judge outputs
+   stored beside the execution results and audited against the graders.
+5. **Submission ledger with dedupe and contamination checks.** Hash every
+   completion, flag exact and near duplicates across submissions, and check
+   completions against the reference solutions and known public solutions
+   before a number is reported.
+6. **Typer CLI and FastAPI service.** Promote the argparse CLI to Typer with
+   the same commands, and expose `validate`, `run` and `results` over HTTP so
+   a queue of submissions can be graded by a long-running service.
 
 ## Development
 
@@ -425,7 +425,8 @@ Layout:
   `HumanEval.jsonl.gz` in `human_eval/data/`), per-sample execution, the
   pass@k estimator and the `evaluate_functional_correctness` CLI.
 - `codeeval/` - the harness package: `errors`, `settings`, `log`, `tasks`,
-  `f2p`, `convert`, `demo`, `cli`.
+  `f2p`, `convert`, `backends`, `metrics`, `breakdown`, `diff`, `demo`,
+  `cli`.
 - `data/` - the example problem and samples, and
   `data/tasks/humaneval_mini.jsonl`, the ported task suite.
 - `tests/` - pytest suite; tests marked `slow` spawn worker processes.
