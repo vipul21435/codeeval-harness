@@ -14,7 +14,7 @@ that proves every grader rejects a stub and accepts the reference, a converter
 from HumanEval problems to pytest tasks, typed settings, JSON logging, a CLI
 with an offline demo, and a digest-pinned Docker image.
 
-Status: the pieces above are implemented, tested (465 tests, 99% line and
+Status: the pieces above are implemented, tested (517 tests, 99% line and
 branch coverage) and run in CI on every push. The FastAPI service, the SQLite
 results store, the Docker sandbox grader and the submission ledger are not
 built yet; see "What I would do next". No network access and no model API key
