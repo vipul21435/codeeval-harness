@@ -84,15 +84,36 @@ def test_read_results_round_trips_and_skips_blank_lines(tmp_path: Path) -> None:
     assert breakdown(read_results(path)).samples == 6
 
 
-def test_demo_results_file_has_only_passes_and_fails() -> None:
-    """The committed demo results: canonical solutions pass, stubs fail, nothing else."""
-    result = breakdown(read_results("results/demo/samples.jsonl_results.jsonl"))
-    assert result.samples > 0
-    assert result.run[Category.PASS] > 0
-    assert result.run[Category.FAIL] > 0
-    assert result.counts()["timeout"] == 0
-    assert result.counts()["syntax_error"] == 0
-    assert result.counts()["sandbox_error"] == 0
+def test_demo_shaped_records_are_passes_and_fails_only(tmp_path: Path) -> None:
+    """Records as `verifybench demo` writes them: canonical passes, stubs `failed: `."""
+    demo = [
+        {
+            "task_id": "HumanEval/0",
+            "completion": "    return x\n",
+            "backend": "mock",
+            "index": 0,
+            "result": "passed",
+            "passed": True,
+        },
+        {
+            "task_id": "HumanEval/0",
+            "completion": "    raise NotImplementedError\n",
+            "backend": "mock",
+            "index": 1,
+            "result": "failed: ",
+            "passed": False,
+        },
+    ]
+    path = tmp_path / "samples.jsonl_results.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in demo), encoding="utf-8")
+    result = breakdown(read_results(path))
+    assert result.counts() == {
+        "pass": 1,
+        "fail": 1,
+        "timeout": 0,
+        "syntax_error": 0,
+        "sandbox_error": 0,
+    }
 
 
 @pytest.mark.parametrize(
