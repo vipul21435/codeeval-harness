@@ -22,12 +22,18 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
   dependencies locked with [uv](https://docs.astral.sh/uv/) on Python 3.12.
   The `pkg_resources`-based `setup.py`, which broke editable installs on
   current setuptools, is gone.
-- The `evaluate_functional_correctness` CLI works on macOS. With the `spawn`
-  multiprocessing start method (the default there) each worker re-imports the
-  parent's `__main__`; upstream ran the CLI at import time, so every worker
-  re-ran it and died, and the parent failed with `EOFError`. The CLI now lives
-  behind a `__main__` guard and `execution.py` selects `spawn` explicitly on
-  every platform.
+- Each sample runs in a fresh interpreter started with `subprocess` instead of
+  a `multiprocessing` worker plus a `Manager` process per sample. That fixes
+  the upstream `EOFError` on macOS (where the `spawn` start method re-imported
+  the CLI's `__main__` in every worker) without forcing a start method: no
+  `if __name__ == "__main__"` guard is needed on any platform, the worker boots
+  with stdlib imports only, and one process is started per sample.
+- The per-sample `timeout` starts when the worker reports that it is running
+  the program, not when the process is launched, so interpreter start-up on a
+  loaded machine no longer turns correct solutions into `timed out`.
+- A pass is derived from the worker's exit status. Upstream let the completion
+  share the interpreter with a `Manager` list and trusted whatever was in it, so
+  a completion could append `"passed"` itself.
 - `--k=1,2,4` no longer crashes (`fire` passes it as a tuple), and pass@k values
   are plain floats rather than `np.float64`.
 - Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
@@ -47,10 +53,17 @@ $ make install    # uv sync + pre-commit install
 ## Usage
 
 **This program runs untrusted model-generated code.** Each sample executes in
-a separate subprocess with a `reliability_guard` that disables the most
+a fresh interpreter with a `reliability_guard` that disables the most
 destructive functions, but that is not a security sandbox. Run evaluations
 inside a container or VM you are prepared to lose; a dockerized sandbox is the
 next item on the roadmap.
+
+The same caveat applies to grading: the completion shares its interpreter with
+the code that runs the tests. The harness never reads the verdict from an
+object the completion can reach (a pass requires the worker to exit with
+status 0, which only happens after the tests ran through), but a completion
+that goes looking for the harness's own references can still forge a pass.
+Treat pass@k on adversarial completions with suspicion until the sandbox lands.
 
 Generate samples and save them as JSON Lines, one sample per line:
 

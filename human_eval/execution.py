@@ -1,28 +1,233 @@
+"""Runs a completion's check program in a throwaway interpreter and grades it.
+
+Each call to :func:`check_correctness` starts a fresh Python process with
+:mod:`subprocess` (never :mod:`multiprocessing`), so:
+
+- the caller needs no ``if __name__ == "__main__"`` guard and no start method
+  is forced: the worker never re-imports the parent's ``__main__``;
+- the worker boots with stdlib imports only, then reports ``started`` on its
+  stdout; the ``timeout`` clock starts at that point, so interpreter start-up
+  under load is never mistaken for a slow completion;
+- the verdict is derived from the worker's exit status. The program under test
+  shares the worker interpreter with :func:`unsafe_execute`, so nothing it can
+  reach (frames, module globals, the stdout pipe) holds a "passed" flag it could
+  flip; the parent grades ``passed`` only for exit status 0, which the worker
+  produces solely after ``exec`` returned normally.
+
+This is still not a security sandbox: the completion runs with the worker's
+privileges and :func:`reliability_guard` only disables the obvious escape
+hatches. Run evaluations inside a container or VM you are prepared to lose.
+"""
+
 import builtins
 import contextlib
 import faulthandler
 import io
-import multiprocessing
+import json
 import os
 import platform
+import select
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, MutableSequence
+import time
+from collections.abc import Callable, Iterator
 from typing import Any, TextIO
 
-# "spawn" is the default start method on macOS and Windows and the only one that
-# is safe to use from a multi-threaded parent (evaluation.py drives this module
-# from a ThreadPoolExecutor). Selecting it explicitly makes Linux behave the same
-# way instead of forking a threaded process, which CPython 3.12 warns about.
-_MP_CONTEXT = multiprocessing.get_context("spawn")
+# Seconds the parent waits for the worker interpreter to boot and report that
+# it is about to run the program. Only start-up counts against it, so it can be
+# generous without letting a hung program linger.
+WORKER_STARTUP_TIMEOUT = 60.0
+
+# Seconds added to ``timeout`` once the program is running: room for the
+# worker's own alarm to fire, the verdict to be written and the process to exit.
+WORKER_GRACE_PERIOD = 1.0
+
+# Bytes of worker stdout and stderr kept in memory (the tail of each stream).
+_CAPTURE_LIMIT = 1 << 16
+
+_STARTED = b"started"
+
+# Runs as the worker's ``__main__``: gives the program the parent's module
+# search path, then hands over to _worker_main. Reads exactly one line so the
+# request that follows it can be read by _worker_main.
+_WORKER_BOOTSTRAP = (
+    "import json, sys\n"
+    "sys.path[:] = json.loads(sys.stdin.buffer.readline())\n"
+    "from human_eval.execution import _worker_main\n"
+    "_worker_main()\n"
+)
 
 
-def unsafe_execute(
-    problem: dict[str, Any], completion: str, timeout: float, result: MutableSequence[str]
-) -> None:
+class WorkerError(RuntimeError):
+    """The worker interpreter could not be started or died before running the program."""
+
+
+def build_check_program(problem: dict[str, Any], completion: str) -> str:
+    """The program that is executed: prompt, completion, tests and the check call."""
+    prompt: str = problem["prompt"]
+    test: str = problem["test"]
+    return prompt + completion + "\n" + test + "\n" + f"check({problem['entry_point']})"
+
+
+def check_correctness(
+    problem: dict[str, Any], completion: str, timeout: float, completion_id: int | None = None
+) -> dict[str, Any]:
+    """
+    Evaluates the functional correctness of a completion by running the test
+    suite provided in the problem.
+
+    :param completion_id: an optional completion ID so we can match
+        the results later even if execution finishes asynchronously.
+    """
+    outcome = run_check_program(build_check_program(problem, completion), timeout)
+    return {
+        "task_id": problem["task_id"],
+        "passed": outcome == "passed",
+        "result": outcome,
+        "completion_id": completion_id,
+    }
+
+
+def run_check_program(program: str, timeout: float) -> str:
+    """Runs ``program`` in a fresh interpreter under :func:`reliability_guard`.
+
+    Returns ``"passed"``, ``"timed out"`` or ``"failed: <reason>"``. ``timeout``
+    bounds the program's own run time; interpreter start-up is not counted.
+    Raises :class:`WorkerError` when no worker could be brought up at all.
+    """
+    request = json.dumps({"program": program, "timeout": timeout})
+    payload = f"{json.dumps(sys.path)}\n{request}\n".encode()
+    with subprocess.Popen(
+        [sys.executable, "-c", _WORKER_BOOTSTRAP],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    ) as proc:
+        try:
+            return _grade(proc, payload, timeout)
+        finally:
+            proc.kill()  # a no-op once the worker has exited
+
+
+def _grade(proc: subprocess.Popen[bytes], payload: bytes, timeout: float) -> str:
+    stdin, stdout, stderr = proc.stdin, proc.stdout, proc.stderr
+    assert stdin is not None
+    assert stdout is not None
+    assert stderr is not None
+    with contextlib.suppress(BrokenPipeError):
+        stdin.write(payload)
+        stdin.close()
+
+    out = bytearray()
+    err = bytearray()
+    streams = {stdout.fileno(): out, stderr.fileno(): err}
+
+    # Phase 1: only the worker's own start-up runs; wait for its first line.
+    started = _pump(streams, time.monotonic() + WORKER_STARTUP_TIMEOUT, lambda: b"\n" in out)
+    if not started:
+        raise WorkerError(f"worker interpreter did not start within {WORKER_STARTUP_TIMEOUT}s")
+    if out.split(b"\n", 1)[0] != _STARTED:
+        proc.kill()
+        proc.wait()
+        raise WorkerError(
+            "worker interpreter exited before running the program "
+            f"({_describe_exit(proc.returncode)}):\n{err.decode(errors='replace').strip()}"
+        )
+
+    # Phase 2: the program is running; it gets ``timeout`` plus a grace period.
+    deadline = time.monotonic() + timeout + WORKER_GRACE_PERIOD
+    if not _pump(streams, deadline, lambda: False):
+        return "timed out"
+    try:
+        proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        return "timed out"
+    return _verdict(proc.returncode, bytes(out))
+
+
+def _pump(streams: dict[int, bytearray], deadline: float, done: Callable[[], bool]) -> bool:
+    """Reads the fds in ``streams`` into their buffers until they all hit EOF.
+
+    Stops early once ``done()`` is true. Returns False if ``deadline`` (a
+    ``time.monotonic()`` value) passes first. Only the tail of each stream is
+    kept so a program writing to the raw fds cannot exhaust the parent's memory.
+    """
+    while streams and not done():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        readable, _, _ = select.select(list(streams), [], [], remaining)
+        if not readable:
+            return False
+        for fd in readable:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                del streams[fd]
+                continue
+            buffer = streams[fd]
+            buffer += chunk
+            if len(buffer) > 2 * _CAPTURE_LIMIT:
+                del buffer[: len(buffer) - _CAPTURE_LIMIT]
+    return True
+
+
+def _verdict(returncode: int, stdout: bytes) -> str:
+    """Combines the worker's exit status with the verdict line it wrote last.
+
+    Exit status 0 is the only evidence of a pass; the verdict line carries the
+    reason for a failure and cannot upgrade a non-zero exit into a pass.
+    """
+    lines = stdout.splitlines()
+    outcome: str | None = None
+    if lines:
+        with contextlib.suppress(ValueError):
+            data = json.loads(lines[-1])
+            if isinstance(data, dict) and isinstance(data.get("outcome"), str):
+                outcome = data["outcome"]
+    if returncode == 0 and outcome == "passed":
+        return "passed"
+    if outcome is not None and outcome != "passed":
+        return outcome
+    return f"failed: worker exited with {_describe_exit(returncode)}"
+
+
+def _describe_exit(returncode: int | None) -> str:
+    if returncode is not None and returncode < 0:
+        with contextlib.suppress(ValueError):
+            return f"signal {signal.Signals(-returncode).name}"
+    return f"status {returncode}"
+
+
+def _worker_main() -> None:
+    """Entry point of the worker interpreter; see ``_WORKER_BOOTSTRAP``."""
+    request = json.loads(sys.stdin.buffer.readline())
+    # Taken before reliability_guard runs so the program cannot reach them
+    # through the os module; they are how the verdict leaves the process.
+    exit_ = os._exit
+    write = os.write
+
+    _write_all(write, _STARTED + b"\n")
+    outcome = unsafe_execute(request["program"], request["timeout"])
+    _write_all(write, json.dumps({"outcome": outcome}).encode() + b"\n")
+    exit_(0 if outcome == "passed" else 1)
+
+
+def _write_all(write: Callable[[int, bytes], int], data: bytes) -> None:
+    while data:
+        data = data[write(1, data) :]
+
+
+def unsafe_execute(check_program: str, timeout: float) -> str:
+    """Runs a check program in the current process and returns the outcome.
+
+    Installs :func:`reliability_guard`, which disables functions process-wide,
+    so this belongs in a throwaway interpreter: :func:`run_check_program` is
+    the entry point for callers.
+    """
     with create_tempdir():
         # These functions are needed when cleaning up the tempdir after the
         # reliability guard has disabled them; keep references to restore.
@@ -34,16 +239,6 @@ def unsafe_execute(
 
         # Disable functionalities that can make destructive changes to the test.
         reliability_guard()
-
-        # Construct the check program and run it.
-        check_program = (
-            problem["prompt"]
-            + completion
-            + "\n"
-            + problem["test"]
-            + "\n"
-            + f"check({problem['entry_point']})"
-        )
 
         try:
             exec_globals: dict[str, Any] = {}
@@ -57,11 +252,11 @@ def unsafe_execute(
                 # does not perform destructive actions on their host or network. For more
                 # information on how OpenAI sandboxes its code, see the accompanying paper.
                 exec(check_program, exec_globals)
-            result.append("passed")
+            outcome = "passed"
         except TimeoutException:
-            result.append("timed out")
+            outcome = "timed out"
         except BaseException as e:
-            result.append(f"failed: {e}")
+            outcome = f"failed: {_safe_str(e)}"
 
         # Needed for cleaning up.
         shutil.rmtree = rmtree
@@ -70,35 +265,14 @@ def unsafe_execute(
         os.unlink = unlink
         os.getcwd = getcwd
 
+    return outcome
 
-def check_correctness(
-    problem: dict[str, Any], completion: str, timeout: float, completion_id: int | None = None
-) -> dict[str, Any]:
-    """
-    Evaluates the functional correctness of a completion by running the test
-    suite provided in the problem.
 
-    :param completion_id: an optional completion ID so we can match
-        the results later even if execution finishes asynchronously.
-    """
-    with _MP_CONTEXT.Manager() as manager:
-        result = manager.list()
-
-        p = _MP_CONTEXT.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
-        p.start()
-        p.join(timeout=timeout + 1)
-        if p.is_alive():
-            p.kill()
-            p.join()
-
-        outcome: str = result[0] if len(result) else "timed out"
-
-    return {
-        "task_id": problem["task_id"],
-        "passed": outcome == "passed",
-        "result": outcome,
-        "completion_id": completion_id,
-    }
+def _safe_str(exc: BaseException) -> str:
+    try:
+        return str(exc)
+    except BaseException:  # a __str__ written by the program may itself be broken
+        return type(exc).__name__
 
 
 @contextlib.contextmanager

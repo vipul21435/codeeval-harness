@@ -1,11 +1,10 @@
 """Console entry point ``evaluate_functional_correctness``.
 
-The CLI is deliberately kept behind ``main()`` and a ``__main__`` guard: with the
-``spawn`` multiprocessing start method (the default on macOS and Windows) every
-worker process re-imports the parent's ``__main__`` module. Running the CLI at
-import time, as upstream did with a module-level ``sys.exit(main())``, made each
-spawned worker re-run ``fire`` with the worker's own argv and die before doing
-any work, which surfaced as an ``EOFError`` from ``multiprocessing.Manager``.
+The CLI lives behind ``main()`` and a ``__main__`` guard so that importing this
+module never runs an evaluation. Correctness does not depend on the guard:
+sample workers are plain subprocesses (see ``human_eval.execution``) and never
+re-import the caller's ``__main__``, so scripts that call the evaluator at
+module level work too.
 """
 
 from collections.abc import Sequence

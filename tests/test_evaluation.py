@@ -1,5 +1,9 @@
 """End-to-end tests for evaluate_functional_correctness on the bundled datasets."""
 
+import ast
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -90,3 +94,47 @@ def test_canonical_solutions_pass_on_real_humaneval_tasks(tmp_path: Path) -> Non
         sample_file, k=[1], n_workers=3, timeout=3.0, problem_file=problem_file
     )
     assert pass_at_k == {"pass@1": 1.0}
+
+
+def test_all_canonical_solutions_pass_with_more_workers_than_cpus(tmp_path: Path) -> None:
+    """Oversubscribing the CPUs slows interpreter start-up, which must not be
+    charged to the sample: every canonical solution has to come back passed."""
+    problems = read_problems()
+    sample_file = tmp_path / "canonical.jsonl"
+    write_jsonl(
+        sample_file,
+        [
+            {"task_id": task_id, "completion": problem["canonical_solution"]}
+            for task_id, problem in problems.items()
+        ],
+    )
+    n_workers = max(16, 2 * (os.cpu_count() or 1))
+
+    pass_at_k = evaluate_functional_correctness(sample_file, k=[1], n_workers=n_workers)
+
+    assert pass_at_k == {"pass@1": 1.0}
+    results_file = sample_file.with_name(sample_file.name + "_results.jsonl")
+    not_passed = {row["task_id"]: row["result"] for row in stream_jsonl(results_file)}
+    assert {k: v for k, v in not_passed.items() if v != "passed"} == {}
+
+
+def test_unguarded_script_can_evaluate(
+    tmp_path: Path, example_problem_file: Path, example_samples_file: Path
+) -> None:
+    """A script that evaluates at module level, with no __main__ guard, works:
+    workers are plain subprocesses and never re-import the caller's script."""
+    script = tmp_path / "unguarded.py"
+    script.write_text(
+        "from human_eval.evaluation import evaluate_functional_correctness\n"
+        "print(evaluate_functional_correctness("
+        f"{str(example_samples_file)!r}, k=[1], timeout=1.0, "
+        f"problem_file={str(example_problem_file)!r}))\n"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, str(script)], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    printed = ast.literal_eval(proc.stdout.strip().splitlines()[-1])
+    assert printed == pytest.approx({"pass@1": 0.5})

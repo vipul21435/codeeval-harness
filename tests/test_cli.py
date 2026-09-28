@@ -1,8 +1,7 @@
 """Tests for the evaluate_functional_correctness console script.
 
-The subprocess tests are the regression tests for the macOS spawn bug: with the
-spawn start method every worker re-imports the parent's __main__ module, so the
-CLI must not run at import time.
+The subprocess tests run the CLI the way users do (``python -m`` and the
+installed console script) and check the documented example numbers end to end.
 """
 
 import ast
