@@ -243,6 +243,32 @@ def test_generate_unknown_canned_task_is_a_provider_error(
     assert "ProviderError" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "extra",
+    [["--canned", "c.jsonl"], ["--failure-rate", "0.5"], ["--seed", "1"]],
+    ids=["canned", "failure-rate", "seed"],
+)
+def test_generate_rejects_mock_only_options_with_openai(
+    tmp_path: Path,
+    make_task: Callable[..., Task],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra: list[str],
+) -> None:
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_API_KEY", "sk-local")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    tasks = tmp_path / "tasks.jsonl"
+    write_tasks(tasks, [make_task()])
+    out = tmp_path / "samples.jsonl"
+    argv = ["generate", "--backend", "openai", "--tasks", str(tasks), "--out", str(out), *extra]
+    assert main(argv) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "ConfigError" in err
+    assert extra[0] in err
+    assert "mock backend" in err
+    assert not out.exists()
+
+
 def test_generate_empty_task_file_is_a_data_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -23,7 +23,7 @@ from pathlib import Path
 
 from codeeval import __version__
 from codeeval.backends import BACKEND_NAMES
-from codeeval.errors import CodeEvalError, DataError
+from codeeval.errors import CodeEvalError, ConfigError, DataError
 from codeeval.log import bind_context, configure_logging
 
 PROG = "verifybench"
@@ -190,6 +190,20 @@ def cmd_generate(args: argparse.Namespace) -> int:
     if args.limit is not None:
         suite = TaskSuite(tasks=suite.tasks[: args.limit])
     name = args.backend if args.backend is not None else get_settings().model_backend
+    mock_only = [
+        flag
+        for flag, value in (
+            ("--canned", args.canned),
+            ("--failure-rate", args.failure_rate),
+            ("--seed", args.seed),
+        )
+        if value is not None
+    ]
+    if name != "mock" and mock_only:
+        raise ConfigError(
+            f"{', '.join(mock_only)} only apply to the mock backend, not {name}",
+            details={"backend": name, "options": mock_only},
+        )
     backend = make_backend(
         name,
         canned=args.canned,
