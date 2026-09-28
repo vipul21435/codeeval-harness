@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual environments and tooling caches
+.venv/
+venv/
+.python-version.local
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Evaluation outputs
+*_results.jsonl
+*_results.jsonl.gz
+results/
+*.db
+*.sqlite
+*.sqlite3
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

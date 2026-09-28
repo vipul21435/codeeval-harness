@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codeeval"
+version = "0.1.0"
+description = "Evaluation harness for LLM-generated code: sandboxed execution, pass@k, graders and reports (fork of openai/human-eval)."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Vipul Jha" }]
+keywords = ["llm", "evaluation", "humaneval", "pass@k", "code-generation", "benchmark"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "fire>=0.7",
+    "numpy>=2.0",
+    "tqdm>=4.66",
+]
+
+[project.urls]
+Homepage = "https://github.com/vipul21435/codeeval-harness"
+Upstream = "https://github.com/openai/human-eval"
+
+[project.scripts]
+evaluate_functional_correctness = "human_eval.evaluate_functional_correctness:main"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "types-tqdm>=4.66",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["codeeval", "human_eval"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "codeeval",
+    "human_eval",
+    "data",
+    "tests",
+    "LICENSE",
+    "README.md",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error"]
+markers = [
+    "slow: tests that spawn subprocesses or wait on timeouts",
+]
+
+[tool.coverage.run]
+source = ["codeeval", "human_eval"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
