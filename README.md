@@ -1,264 +1,349 @@
 Forked from https://github.com/openai/human-eval.
 
-# verifybench
+# VerifyBench
 
 [![CI](https://github.com/vipul21435/verifybench/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/vipul21435/verifybench/actions/workflows/ci.yml)
 
 VerifyBench is an evaluation harness for LLM-generated code, built on OpenAI's
 [human-eval](https://github.com/openai/human-eval): the HumanEval dataset and
 the pass@k evaluator from the paper "[Evaluating Large Language Models Trained
-on Code](https://arxiv.org/abs/2107.03374)".
+on Code](https://arxiv.org/abs/2107.03374)". The fork keeps the upstream
+`human_eval` package importable with its evaluation semantics and grows a
+`codeeval` package around it: a pydantic task schema, a fail-to-pass validator
+that proves every grader rejects a stub and accepts the reference, a converter
+from HumanEval problems to pytest tasks, typed settings, JSON logging, a CLI
+with an offline demo, and a digest-pinned Docker image.
 
-The upstream `human_eval` package stays importable and keeps its evaluation
-semantics. This fork modernizes the packaging and tooling around it and grows a
-`codeeval` package on top. Planned, in order:
-
-- sandboxed, dockerized execution of model-generated code (digest-pinned images)
-- pytest graders with fail-to-pass verification (the task schema and the
-  validator are in; the grader that scores completions comes with the sandbox)
-- pass@k and per-task reports, results stored in SQLite
-- LLM-as-judge grading against a rubric
-- a Typer CLI and a FastAPI service
-- a deterministic stub model provider so the whole pipeline runs offline
+Status: the pieces above are implemented, tested (465 tests, 99% line and
+branch coverage) and run in CI on every push. The FastAPI service, the SQLite
+results store, the Docker sandbox grader and the submission ledger are not
+built yet; see "What I would do next". No network access and no model API key
+are needed for anything in this repository.
 
 ## What I built on top
 
-- `pyproject.toml` with a [hatchling](https://hatch.pypa.io/) build and
-  dependencies locked with [uv](https://docs.astral.sh/uv/) on Python 3.12.
-  The `pkg_resources`-based `setup.py`, which broke editable installs on
-  current setuptools, is gone.
-- Each sample runs in a fresh interpreter started with `subprocess` instead of
-  a `multiprocessing` worker plus a `Manager` process per sample. That fixes
-  the upstream `EOFError` on macOS (where the `spawn` start method re-imported
-  the CLI's `__main__` in every worker) without forcing a start method: no
-  `if __name__ == "__main__"` guard is needed on any platform, the worker boots
-  with stdlib imports only, and one process is started per sample.
-- The per-sample `timeout` starts when the worker reports that it is running
-  the program, not when the process is launched, so interpreter start-up on a
-  loaded machine no longer turns correct solutions into `timed out`.
-- A pass is derived from the worker's exit status. Upstream let the completion
-  share the interpreter with a `Manager` list and trusted whatever was in it, so
-  a completion could append `"passed"` itself.
-- `reliability_guard` also disables `os._exit`, `exec*` and `posix_spawn*`
-  (so a completion cannot choose the worker's exit status), applies the `os`
-  denylist to the `posix` module too (`__import__("posix").getcwd()` used to
-  work around `os.getcwd = None`), and blocks `ctypes`.
-- `--k=1,2,4` no longer crashes (`fire` passes it as a tuple), and pass@k values
-  are plain floats rather than `np.float64`.
-- The HumanEval dataset ships inside the package (`human_eval/data/`), so
-  `read_problems()` and the CLI's default `--problem_file` work after a wheel
-  install. Upstream resolved it relative to the source checkout, which broke
-  `pip install .`.
-- Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
-  by a pytest suite that reproduces the documented example numbers.
-- Typed settings (`codeeval.settings`): every knob is a `VERIFYBENCH_*`
-  environment variable or `.env` entry, validated up front by pydantic-settings
-  with a `ConfigError` that names the offending variable; the evaluator's
-  `--n_workers` and `--timeout` default to them.
-- Structured logging (`codeeval.log`): one JSON object per record on stderr
-  with `timestamp`, `level`, `logger`, `message` and extras such as `run_id`
-  and `task_id`, a plain text fallback, and `bind_context()` to stamp a block
-  of records; the CLI configures it from the settings.
-- A GitHub Actions workflow (`.github/workflows/ci.yml`) that runs ruff,
-  `ruff format --check`, `mypy --strict` and pytest with coverage on every
-  push and pull request to `master`, uploads `coverage.xml` as an artifact
-  and cancels superseded runs; `make ci` runs the same commands locally.
-- A task schema (`codeeval.tasks`): a pydantic `Task` with a strictly
-  patterned `task_id`, prompt, entry point, a reference solution that must
-  pass, a baseline stub that must fail, a pytest `tests` module, language,
-  difficulty and metadata, validated statically (parses, defines the entry
-  point, imports `solution`, has a test function); `TaskSuite` files are
-  JSON Lines read and written with errors that name the file and line.
-- A fail-to-pass validator (`codeeval.f2p`): runs each task's tests against
-  the baseline and the reference in fresh interpreters with a timeout,
-  repeats them (3 by default) to catch flaky graders, and returns per-task
-  verdicts (`ok`, `baseline_passes`, `reference_fails`, `flaky`, `error`)
-  with every run's exit status, duration and output behind them.
-- A HumanEval converter (`codeeval.convert`): the upstream `check(candidate)`
-  becomes a pytest module and the canonical solution the reference, with a
-  `NotImplementedError` stub as the baseline; the first 20 problems ship as
-  `data/tasks/humaneval_mini.jsonl`, regenerated byte for byte by
-  `python -m codeeval.convert`, and the suite validates clean.
+Every item below is fork work; `git log --author=vipul21435@iiitd.ac.in`
+lists the commits.
 
-## Installation
+- **Packaging**: `pyproject.toml` with a hatchling build and dependencies
+  locked with uv on Python 3.12; the `pkg_resources`-based `setup.py` is gone
+  and the HumanEval dataset ships inside the wheel (`human_eval/data/`), so
+  `read_problems()` works after `pip install .`.
+- **Subprocess worker**: each sample runs in a fresh interpreter started with
+  `subprocess` instead of a `multiprocessing` worker plus a `Manager` process.
+  No start method is forced and no `__main__` guard is needed, which fixes the
+  upstream `EOFError` on macOS.
+- **Timeouts that start when the program starts**: the worker reports
+  `started` after booting and the per-sample clock starts then, so interpreter
+  start-up under load no longer turns correct solutions into `timed out`.
+- **A pass that the completion cannot forge**: the verdict is the worker's
+  exit status, produced only after the check program ran through. Upstream
+  trusted a `Manager` list the completion could append `"passed"` to.
+  `reliability_guard` additionally disables `os._exit`, `exec*`,
+  `posix_spawn*`, the `posix` aliases of the `os` denylist and `ctypes`.
+- **Upstream CLI fixes**: `--k=1,2,4` no longer crashes (`fire` passes a
+  tuple) and pass@k values are plain floats.
+- **Types, lint, tests**: `mypy --strict`, ruff, and a pytest suite that
+  reproduces the documented example numbers end to end.
+- **Typed settings** (`codeeval.settings`): every knob is a `VERIFYBENCH_*`
+  variable or `.env` entry validated by pydantic-settings; a bad value raises
+  `ConfigError` naming the variable.
+- **Structured logging** (`codeeval.log`): one JSON object per record with
+  `run_id` and `task_id` bound through `bind_context()`, and a text fallback.
+- **Task schema** (`codeeval.tasks`): a pydantic `Task` (prompt, entry point,
+  reference solution, baseline stub, pytest `tests`, language, difficulty,
+  metadata) validated statically, and JSONL suites whose errors name the file
+  and line.
+- **Fail-to-pass validator** (`codeeval.f2p`): runs each task's tests against
+  the baseline and the reference in fresh interpreters, repeats them to catch
+  flaky graders, and returns `ok`, `baseline_passes`, `reference_fails`,
+  `flaky` or `error` with every run's exit status, duration and output.
+- **HumanEval converter** (`codeeval.convert`): `check(candidate)` becomes a
+  pytest module, the canonical solution the reference, a `NotImplementedError`
+  stub the baseline; `data/tasks/humaneval_mini.jsonl` (20 tasks) is
+  regenerated byte for byte.
+- **CLI and demo** (`codeeval.cli`, `codeeval.demo`): `verifybench demo`,
+  `validate` and `convert`; the demo validates the mini suite and scores
+  canonical and stub completions with pass@k in about 8 seconds, offline.
+- **CI and Docker**: a GitHub Actions workflow running ruff, mypy, pytest with
+  coverage, a digest-pinned non-root `python:3.12-slim` image that runs the
+  demo, a compose file, and a CI job that builds the image and runs the demo
+  in it.
 
-Requires [uv](https://docs.astral.sh/uv/getting-started/installation/); it
-installs Python 3.12 itself if needed.
+## Architecture
 
-```
-$ git clone https://github.com/vipul21435/verifybench
-$ cd verifybench
-$ make install    # uv sync + pre-commit install
-```
-
-A plain `pip install .` (or installing the wheel from `uv build`) works too;
-the HumanEval dataset ships inside the package.
-
-## Usage
-
-**This program runs untrusted model-generated code.** Each sample executes in
-a fresh interpreter with a `reliability_guard` that disables the most
-destructive functions, but that is not a security sandbox. Run evaluations
-inside a container or VM you are prepared to lose; a dockerized sandbox is the
-next item on the roadmap.
-
-The same caveat applies to grading: the completion shares its interpreter with
-the code that runs the tests. The harness never reads the verdict from an
-object the completion can reach (a pass requires the worker to exit with
-status 0, which only happens after the tests ran through), and the guard
-disables `os._exit`, the `exec*` and `posix_spawn*` functions, their `posix`
-module aliases and `ctypes`, which would let a completion pick its own exit
-status. A completion that goes looking for the harness's own references can
-still forge a pass, though. Treat pass@k on adversarial completions with
-suspicion until the sandbox lands.
-
-Generate samples and save them as JSON Lines, one sample per line:
-
-```
-{"task_id": "Corresponding HumanEval task ID", "completion": "Completion only without the prompt"}
+```mermaid
+flowchart LR
+    HE[("HumanEval.jsonl.gz<br/>packaged dataset")] --> CONV["codeeval.convert<br/>check() to pytest task"]
+    CONV --> TASKS[("data/tasks/*.jsonl<br/>Task schema (pydantic)")]
+    TASKS --> F2P["codeeval.f2p<br/>fail-to-pass validator"]
+    F2P -->|"fresh interpreter,<br/>repeated N times"| GRADER["pytest run<br/>baseline must fail<br/>reference must pass"]
+    SAMPLES[("samples.jsonl<br/>model completions")] --> EVAL["human_eval.evaluation<br/>pass@k estimator"]
+    EVAL -->|"one subprocess<br/>per sample"| WORKER["worker interpreter<br/>reliability_guard + timeout"]
+    WORKER -->|"exit status 0 = pass"| EVAL
+    EVAL --> RESULTS[("samples.jsonl_results.jsonl")]
+    F2P --> CLI["verifybench CLI<br/>demo / validate / convert"]
+    EVAL --> CLI
+    SETTINGS["codeeval.settings<br/>VERIFYBENCH_* env, .env"] -.-> F2P
+    SETTINGS -.-> EVAL
+    LOG["codeeval.log<br/>JSON records, run_id"] -.-> CLI
 ```
 
-`data/example_problem.jsonl` and `data/example_samples.jsonl` illustrate the
-format. The snippet below writes completions for every task; supply your own
-`generate_one_completion`:
+The upstream `human_eval` package (bottom row) scores completions; the
+`codeeval` package (top row) makes sure the graders deserve to be trusted
+before any completion is scored, and wraps both in configuration, logging and
+a CLI.
 
-```python
-from human_eval.data import read_problems, write_jsonl
+## Quickstart
 
-problems = read_problems()
-
-num_samples_per_task = 200
-samples = [
-    dict(task_id=task_id, completion=generate_one_completion(problems[task_id]["prompt"]))
-    for task_id in problems
-    for _ in range(num_samples_per_task)
-]
-write_jsonl("samples.jsonl", samples)
-```
-
-Evaluate them with:
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/)
+(it installs Python 3.12 itself if needed) and, for the last line, Docker.
 
 ```
-$ uv run evaluate_functional_correctness samples.jsonl
-Reading samples...
-32800it [00:01, 23787.50it/s]
-Running test suites...
-100%|...| 32800/32800 [16:11<00:00, 33.76it/s]
-Writing results to samples.jsonl_results.jsonl...
-100%|...| 32800/32800 [00:00<00:00, 42876.84it/s]
-{'pass@1': ..., 'pass@10': ..., 'pass@100': ...}
+git clone https://github.com/vipul21435/verifybench && cd verifybench
+uv sync
+make demo
+uv run verifybench validate data/tasks/humaneval_mini.jsonl
+docker build -t verifybench:dev . && docker run --rm verifybench:dev
 ```
 
-A file ending in `<input_path>_results.jsonl` is written next to the input;
-each row carries the original sample plus `passed` and the execution `result`,
-one of `"passed"`, `"timed out"` or `"failed: <reason>"`.
+`make demo` validates the 20 bundled tasks, scores 40 completions and prints
+the table shown under "Sample output"; it exits 0 only if every task behaved
+as expected. The Docker line builds the image and runs the same demo inside
+it as a non-root user. `docker compose run --rm demo` does the same with
+outputs kept in a named volume.
 
-As a sanity check, the bundled example samples give pass@1 = 0.5 (and, with
-`--k=1,2,4`, pass@2 = 0.8 and pass@4 = 1.0):
+## CLI and API reference
+
+### `verifybench` (also `python -m codeeval`)
+
+| Command | What it does | Exit status |
+| --- | --- | --- |
+| `verifybench demo [--tasks FILE] [--limit N] [--repeats N] [--workers N] [--timeout S] [--results-dir DIR]` | validates a task suite, then scores the canonical solution and a `NotImplementedError` stub per task with pass@1 and pass@2; writes `samples.jsonl`, `problems.jsonl`, the results file and `summary.json` under `<results-dir>/demo` | 0 when every task is `ok`, every canonical completion passed and every stub failed; 1 otherwise |
+| `verifybench validate FILE [--repeats N] [--workers N] [--timeout S]` | fail-to-pass validation of a JSONL task file; prints `task_id<TAB>verdict` per task and the verdict counts | 0 when all `ok`, 1 otherwise |
+| `verifybench convert OUTPUT [--limit N] [--problem-file FILE]` | ports HumanEval problems to a task file (`--limit 0` ports all 164) | 0 |
+
+Any `CodeEvalError` (unreadable file, invalid task, bad setting) is printed
+as one line on stderr and becomes exit status 2. Every command logs JSON
+records to stderr (`VERIFYBENCH_LOG_FORMAT=text` for plain lines).
+
+### `evaluate_functional_correctness` (upstream CLI)
+
+```
+uv run evaluate_functional_correctness samples.jsonl [--k=1,10,100] [--n_workers=4] [--timeout=3] [--problem_file=...]
+```
+
+Reads `{"task_id": ..., "completion": ...}` lines, runs each completion in a
+fresh interpreter, writes `<samples>_results.jsonl` (each sample plus
+`passed` and `result`, one of `passed`, `timed out`, `failed: <reason>`) and
+prints the pass@k dict. `--n_workers` and `--timeout` default to the
+settings. With the bundled example:
 
 ```
 $ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_file=data/example_problem.jsonl --k=1,2,4
-Reading samples...
-Running test suites...
-Writing results to data/example_samples.jsonl_results.jsonl...
 {'pass@1': 0.4999999999999999, 'pass@2': 0.8, 'pass@4': 1.0}
 ```
 
-There is no unbiased estimate of pass@k with fewer than k samples per task, so
-such k are skipped. See `uv run evaluate_functional_correctness --help` for the
-remaining options (`--n_workers`, `--timeout`, `--problem_file`).
+### Python API
 
-## Fail-to-pass tasks
+| Import | Purpose |
+| --- | --- |
+| `codeeval.tasks.Task`, `TaskSuite`, `read_tasks(path)`, `write_tasks(path, tasks)` | the task schema and JSONL suites; `DataError("<file>:<line>: ...")` on bad input |
+| `codeeval.f2p.validate_task(task, repeats=3, timeout=30.0)`, `validate_suite(suite, workers=None)` | fail-to-pass verdicts (`TaskVerdict`, `SuiteVerdict` with `.counts`, `.ok`, `.failures`) |
+| `codeeval.convert.humaneval_to_task(problem)`, `humaneval_to_tasks(limit=20)` | HumanEval problems to tasks |
+| `codeeval.demo.run_demo(tasks_file, limit=None, repeats=3)`, `render_report(report)` | the demo as a function returning a `DemoReport` |
+| `codeeval.settings.get_settings()`, `override_settings(**changes)` | typed settings, cached per process; the override is how tests pin values |
+| `codeeval.log.configure_logging()`, `bind_context(run_id=...)` | the JSON logger and its bound context |
+| `codeeval.errors.CodeEvalError` and `ConfigError`, `DataError`, `ProviderError`, `ExecutionError`, `GradingError`, `StorageError` | the exception hierarchy, one class per pipeline stage |
+| `human_eval.evaluation.evaluate_functional_correctness(sample_file, k, n_workers, timeout, problem_file)`, `estimate_pass_at_k(n, c, k)` | the upstream evaluator and estimator |
+| `human_eval.execution.check_correctness(problem, completion, timeout)` | one completion, one fresh interpreter |
+| `human_eval.data.read_problems()`, `stream_jsonl`, `write_jsonl` | the packaged dataset and JSONL helpers |
 
-Model completions are graded by pytest tasks (`codeeval.tasks.Task`): the
-`tests` module imports the solution as `solution` and the two bundled
-solutions prove the grader works before any model is scored. The reference
-must pass and the baseline stub must fail; `codeeval.f2p` runs both in fresh
-interpreters, three times each, so a grader that accepts a stub, rejects the
-reference or changes its mind between runs is caught:
+Not built yet (planned, see below): a FastAPI service, the SQLite results
+store, the Docker sandbox grader and the submission ledger. The settings
+already carry `sandbox_backend`, `docker_image` and `db_path` for them, but
+`sandbox_backend=docker` selects nothing today: completions always run in a
+local subprocess.
 
-```python
-from codeeval.f2p import validate_suite
-from codeeval.tasks import read_tasks
+### Configuration
 
-suite = read_tasks("data/tasks/humaneval_mini.jsonl")
-report = validate_suite(suite)  # 3 repeats each, tasks in parallel
-print(
-    report.counts
-)  # {'ok': 20, 'baseline_passes': 0, 'reference_fails': 0, 'flaky': 0, 'error': 0}
-for verdict in report.failures:
-    print(verdict.task_id, verdict.verdict, verdict.error)
-```
-
-`data/tasks/humaneval_mini.jsonl` holds the first 20 HumanEval problems ported
-by `codeeval.convert` (the upstream `check(candidate)` becomes one pytest
-test, the canonical solution the reference, a `NotImplementedError` stub the
-baseline). Regenerate it, or port more problems, with:
-
-```
-$ uv run python -m codeeval.convert data/tasks/humaneval_mini.jsonl --limit 20
-```
-
-A task file is JSON Lines with one task per line; `read_tasks` reports a bad
-line as `DataError("<file>:<line>: ...")` and `write_tasks` writes lines that
-read back equal.
-
-## Configuration
-
-Every setting is a field of `codeeval.settings.Settings`. Set it with a
-`VERIFYBENCH_<NAME>` environment variable or with the same key in a `.env`
-file in the working directory (`.env.example` lists them all). An environment
-variable beats a `.env` entry, which beats the default:
+Every setting is a field of `codeeval.settings.Settings`, set with a
+`VERIFYBENCH_<NAME>` environment variable or the same key in `.env`
+(`.env.example` lists them all). An environment variable beats a `.env`
+entry, which beats the default.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `VERIFYBENCH_SANDBOX_BACKEND` | `subprocess` | where generated code runs: `subprocess` or `docker` |
 | `VERIFYBENCH_SAMPLE_TIMEOUT` | `3.0` | seconds one sample may run before it is graded as timed out |
-| `VERIFYBENCH_WORKERS` | `4` | samples executed concurrently |
-| `VERIFYBENCH_DOCKER_IMAGE` | `python:3.12-slim` | image reference (tag or digest) for the docker backend |
-| `VERIFYBENCH_RESULTS_DIR` | `results` | directory that receives run outputs |
-| `VERIFYBENCH_DB_PATH` | `results/verifybench.sqlite` | SQLite results store |
+| `VERIFYBENCH_WORKERS` | `4` | samples and tasks processed concurrently |
+| `VERIFYBENCH_RESULTS_DIR` | `results` | directory that receives run outputs (`results/demo` for the demo) |
 | `VERIFYBENCH_LOG_FORMAT` | `json` | log record format: `json` or `text` |
 | `VERIFYBENCH_LOG_LEVEL` | `INFO` | least severe log level emitted |
 | `VERIFYBENCH_SEED` | `0` | seed for everything randomised |
+| `VERIFYBENCH_SANDBOX_BACKEND` | `subprocess` | reserved for the Docker grader; only `subprocess` does anything today |
+| `VERIFYBENCH_DOCKER_IMAGE` | `python:3.12-slim` | reserved for the Docker grader |
+| `VERIFYBENCH_DB_PATH` | `results/verifybench.sqlite` | reserved for the SQLite store |
 
-Bad values fail fast: `get_settings()` raises `codeeval.errors.ConfigError`
-naming each offending variable. It loads the settings once per process;
-`override_settings(workers=1)` swaps them inside a `with` block, which is how
-the tests pin a configuration. `evaluate_functional_correctness` reads
-`--n_workers` and `--timeout` from the settings when they are not given.
+## Sample output
 
-## Logging
-
-The CLI writes one JSON object per log record to stderr: `timestamp`,
-`level`, `logger`, `message`, then extras such as `run_id`, `task_id` or
-`n_samples`. `VERIFYBENCH_LOG_FORMAT=text` switches to a one-line text format
-and `VERIFYBENCH_LOG_LEVEL` sets the threshold. Your own code calls
-`configure_logging()` once at start-up; `bind_context()` stamps every record
-emitted inside the block, including records logged by libraries:
-
-```python
-import logging
-
-from codeeval.log import bind_context, configure_logging
-
-configure_logging()
-with bind_context(run_id="run-42"):
-    logging.getLogger("codeeval.demo").info("graded", extra={"task_id": "HumanEval/0"})
-```
+`make demo` on the bundled suite (stderr, which carries the JSON log records
+and the evaluator's progress bars, omitted):
 
 ```
-{"timestamp": "2026-09-28T19:02:11.481Z", "level": "INFO", "logger": "codeeval.demo", "message": "graded", "run_id": "run-42", "task_id": "HumanEval/0"}
+$ make demo
+uv run python -m codeeval demo
+Reading samples...
+Running test suites...
+Writing results to results/demo/samples.jsonl_results.jsonl...
+VerifyBench demo: data/tasks/humaneval_mini.jsonl (20 tasks)
+
+[1/2] fail-to-pass validation: 20 tasks x 2 solutions x 3 repeats = 120 grader runs, 4 workers, 30s timeout each
+      ok=20 baseline_passes=0 reference_fails=0 flaky=0 error=0 in 6.9s
+
+[2/2] pass@k evaluation: 40 completions (canonical solution + NotImplementedError stub per task), 4 workers, 3s timeout each
+      pass@1=0.500 pass@2=1.000 in 0.4s
+
+task_id       entry_point                difficulty  f2p  samples  passed  pass@1  canonical  stub
+------------  -------------------------  ----------  ---  -------  ------  ------  ---------  ------
+HumanEval/0   has_close_elements         medium      ok         2       1    0.50  passed     failed
+HumanEval/1   separate_paren_groups      hard        ok         2       1    0.50  passed     failed
+HumanEval/2   truncate_number            easy        ok         2       1    0.50  passed     failed
+HumanEval/3   below_zero                 medium      ok         2       1    0.50  passed     failed
+HumanEval/4   mean_absolute_deviation    easy        ok         2       1    0.50  passed     failed
+HumanEval/5   intersperse                medium      ok         2       1    0.50  passed     failed
+HumanEval/6   parse_nested_parens        medium      ok         2       1    0.50  passed     failed
+HumanEval/7   filter_by_substring        easy        ok         2       1    0.50  passed     failed
+HumanEval/8   sum_product                medium      ok         2       1    0.50  passed     failed
+HumanEval/9   rolling_max                medium      ok         2       1    0.50  passed     failed
+HumanEval/10  make_palindrome            medium      ok         2       1    0.50  passed     failed
+HumanEval/11  string_xor                 medium      ok         2       1    0.50  passed     failed
+HumanEval/12  longest                    medium      ok         2       1    0.50  passed     failed
+HumanEval/13  greatest_common_divisor    easy        ok         2       1    0.50  passed     failed
+HumanEval/14  all_prefixes               easy        ok         2       1    0.50  passed     failed
+HumanEval/15  string_sequence            easy        ok         2       1    0.50  passed     failed
+HumanEval/16  count_distinct_characters  easy        ok         2       1    0.50  passed     failed
+HumanEval/17  parse_music                easy        ok         2       1    0.50  passed     failed
+HumanEval/18  how_many_times             medium      ok         2       1    0.50  passed     failed
+HumanEval/19  sort_numbers               hard        ok         2       1    0.50  passed     failed
+
+results: results/demo/samples.jsonl_results.jsonl
+verdict: OK, every task behaved as expected
 ```
+
+pass@1 is 0.5 by construction: each task gets one correct and one failing
+completion, and the estimator is unbiased. A grader that accepted the stub
+would show `baseline_passes` in the `f2p` column and `passed` under `stub`,
+and the demo would exit 1.
+
+One JSON log record from the same run:
+
+```
+{"timestamp": "2026-09-28T21:45:32.196Z", "level": "INFO", "logger": "codeeval.f2p", "message": "validated suite", "command": "demo", "counts": {"ok": 20, "baseline_passes": 0, "reference_fails": 0, "flaky": 0, "error": 0}, "duration": 6.836, "n_tasks": 20, "ok": true, "repeats": 3, "run_id": "961847a6aa85"}
+```
+
+## Design decisions and tradeoffs
+
+- **Validate graders before scoring models.** A benchmark task is only as
+  good as its tests. Every task carries a reference that must pass and a
+  baseline that must fail, and the validator repeats both runs (3 by default)
+  so a flaky grader is caught before a model's number depends on it. The cost
+  is 6 pytest runs per task; on this machine that is about 60 ms per run of
+  work spread over 4 workers, which is cheap next to a single model call.
+- **A subprocess per sample, not a pool.** Upstream used `multiprocessing`
+  with a `Manager` per sample. A plain subprocess per sample costs one
+  interpreter start (about 40 ms) but needs no start method, no `__main__`
+  guard, and gives the parent a verdict (the exit status) that the completion
+  cannot reach. The timeout clock starts when the worker says it is running
+  the program, so a loaded machine does not produce false `timed out` results.
+- **Exit status is the only evidence of a pass.** The worker exits 0 only
+  after the check program returned normally; a completion that prints
+  `passed` or reaches into module globals gains nothing. `reliability_guard`
+  is still not a sandbox, so a completion could in principle find the
+  harness's own references; the README says so and the Docker grader is the
+  planned fix.
+- **Tasks are complete modules, not prompt plus completion.** Reference and
+  baseline are whole files the tests import as `solution`, so a task can be
+  graded by any pytest-capable runner (including a container) with no
+  knowledge of how the completion was produced. The tradeoff is that the
+  HumanEval demo has to look up the original problem to score completions the
+  upstream way; the converter records `upstream_task_id` in metadata for that.
+- **pydantic with `strict=True`, `frozen=True`, `extra="forbid"`.** A task
+  file with a typo in a field name fails to load instead of silently carrying
+  an unused key. Static checks (parses, defines the entry point, imports
+  `solution`, has a test function) run at load time; dynamic ones are the
+  validator's job.
+- **Settings through one typed object.** Every knob has one name, one
+  default, one validation rule and one error message; tests pin values with
+  `override_settings` instead of touching the environment.
+- **JSON logs on stderr, results on stdout and disk.** Machines read the
+  records; humans read the table. Bound context (`run_id`, `task_id`) means
+  records from libraries carry the same ids.
+- **Keep `human_eval` importable.** The upstream API and numbers are
+  unchanged, so anything written against `human_eval` keeps working; the
+  fork's additions live in `codeeval`.
+- **What was left out on purpose.** No model provider, no network calls, no
+  database: the repository is fully offline and every number in it can be
+  reproduced with `make demo`.
+
+## Benchmarks
+
+Measured on 2026-09-29 on an Apple Silicon Mac (Apple M2, 8 cores, 8 GB RAM),
+macOS, Python 3.12.13, uv-managed virtualenv, nothing else running. All
+numbers are wall-clock from a single run; the harness itself does not
+resample.
+
+| What | Command | Result |
+| --- | --- | --- |
+| Offline demo, 20 tasks | `time make demo` | 7.6 s wall-clock (real 7.62, user 17.06, sys 4.07) |
+| Fail-to-pass validation inside the demo | part of `make demo` | 120 grader runs (20 tasks x 2 solutions x 3 repeats) in 6.9 s with 4 workers, i.e. about 17 pytest runs/s |
+| pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.4 s with 4 workers, i.e. about 100 samples/s (each in a fresh interpreter) |
+| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 465 tests in 46.3 s; 99% line and branch coverage (1137 statements, 8 missed) |
+| Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | DOCKER_BUILD_TIME |
+| Demo inside the container | `time docker run --rm verifybench:dev` | DOCKER_DEMO_TIME |
+
+The task suite is small on purpose: 20 tasks make the demo quick and the
+output readable. `verifybench convert all.jsonl --limit 0` ports all 164
+HumanEval problems and `verifybench validate all.jsonl` validates them; the
+cost scales linearly with the number of grader runs.
+
+## What I would do next
+
+In order of value:
+
+1. **Model backends.** A `Provider` interface with a deterministic offline
+   stub (seeded from `VERIFYBENCH_SEED`) plus OpenAI- and Anthropic-compatible
+   HTTP backends, so `verifybench run --provider stub` produces samples that
+   the existing evaluator scores. Keys stay in `.env`; the settings already
+   ignore extra keys for this.
+- **Docker sandbox grader.** Honour `VERIFYBENCH_SANDBOX_BACKEND=docker`:
+  run each task's pytest in a digest-pinned container with no network, a
+  read-only root, a pids limit and a memory limit (the compose file already
+  applies these to the demo). That closes the remaining gap in
+  `reliability_guard`.
+- **pass@k bootstrap confidence intervals and reports.** Resample tasks to
+  give every pass@k a 95% interval, write a Markdown/JSON report per run, and
+  make the demo's numbers comparable across models rather than a sanity check.
+- **SQLite results store and an LLM judge with a rubric.** Persist every run
+  (`VERIFYBENCH_DB_PATH` is reserved for it), then add a rubric-driven judge
+  for tasks whose correctness is not a pytest verdict, with judge outputs
+  stored beside the execution results and audited against the graders.
+- **Submission ledger with dedupe and contamination checks.** Hash every
+  completion, flag exact and near duplicates across submissions, and check
+  completions against the reference solutions and known public solutions
+  before a number is reported.
+- **Typer CLI and FastAPI service.** Promote the argparse CLI to Typer with
+  the same commands, and expose `validate`, `run` and `results` over HTTP so
+  a queue of submissions can be graded by a long-running service.
 
 ## Development
 
 ```
-$ make check        # ruff check, ruff format --check, mypy --strict, pytest
-$ make ci           # the CI workflow's exact commands, coverage.xml included
-$ make test-fast    # skip the tests that spawn subprocesses
-$ make coverage     # pytest with branch coverage
-$ make format       # auto-fix lint findings and reformat
+make check        # ruff check, ruff format --check, mypy --strict, pytest
+make ci           # the CI workflow's exact commands, coverage.xml included
+make test-fast    # skip the tests that spawn subprocesses
+make coverage     # pytest with branch coverage
+make format       # auto-fix lint findings and reformat
+make demo         # the offline demo
 ```
 
 Layout:
@@ -266,16 +351,22 @@ Layout:
 - `human_eval/` - the upstream package: dataset loading (with
   `HumanEval.jsonl.gz` in `human_eval/data/`), per-sample execution, the
   pass@k estimator and the `evaluate_functional_correctness` CLI.
-- `codeeval/` - the harness package: `errors` (the exception hierarchy),
-  `settings` (typed configuration), `log` (structured logging), `tasks` (the
-  task schema and JSONL suites), `f2p` (the fail-to-pass validator) and
-  `convert` (HumanEval to tasks); further modules land slice by slice.
-- `data/` - the example problem and samples used in this README and the
-  tests, and `data/tasks/humaneval_mini.jsonl`, the ported task suite.
+- `codeeval/` - the harness package: `errors`, `settings`, `log`, `tasks`,
+  `f2p`, `convert`, `demo`, `cli`.
+- `data/` - the example problem and samples, and
+  `data/tasks/humaneval_mini.jsonl`, the ported task suite.
 - `tests/` - pytest suite; tests marked `slow` spawn worker processes.
+- `Dockerfile`, `docker-compose.yml`, `.github/workflows/ci.yml` - the image,
+  the compose service and the CI workflow (lint, typecheck, test with
+  coverage, docker build plus demo).
 
-Copy `.env.example` to `.env` to change settings locally (see Configuration);
-nothing in the repository needs credentials.
+**This program runs untrusted model-generated code.** Each sample executes in
+a fresh interpreter with a `reliability_guard` that disables the most
+destructive functions, but that is not a security sandbox. Run evaluations
+inside the container (or a VM you are prepared to lose).
+
+Copy `.env.example` to `.env` to change settings locally; nothing in the
+repository needs credentials.
 
 ## Known Issues
 
