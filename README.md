@@ -87,7 +87,9 @@ lists the commits.
   result string folds into `pass`, `fail`, `timeout`, `syntax_error` (a
   compile-time error, recognised by its `(<string>, line N)` suffix) or
   `sandbox_error` (the worker died), counted per task and per run from a
-  `*_results.jsonl` file whose malformed lines are reported by file and line.
+  `*_results.jsonl` file whose malformed lines (bad JSON, missing or
+  non-string `task_id`/`result`, unknown result string) are reported by file
+  and line.
 - **Run-to-run regression diff** (`codeeval.diff`): compares the per-task
   pass rate (passes / samples, as an exact `Fraction`) of two result files
   and groups tasks into regressed, improved, unchanged, added and removed;

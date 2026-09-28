@@ -65,18 +65,35 @@ class Breakdown:
         return {category.value: self.run[category] for category in Category}
 
 
+def _fields(record: Mapping[str, Any]) -> tuple[str, str]:
+    """The ``task_id`` and ``result`` strings of one record, or a :class:`DataError`."""
+    task_id, result = record.get("task_id"), record.get("result")
+    if not isinstance(task_id, str) or not isinstance(result, str):
+        raise DataError(
+            "record needs a task_id string and a result string",
+            details={"task_id": task_id, "result": result},
+        )
+    return task_id, result
+
+
 def breakdown(records: Iterable[Mapping[str, Any]]) -> Breakdown:
     """Count categories per task and overall from ``task_id``/``result`` records."""
     result = Breakdown()
     for record in records:
-        category = categorize(str(record["result"]))
+        task_id, verdict = _fields(record)
+        category = categorize(verdict)
         result.run[category] += 1
-        result.tasks.setdefault(str(record["task_id"]), Counter())[category] += 1
+        result.tasks.setdefault(task_id, Counter())[category] += 1
     return result
 
 
 def read_results(path: str | Path) -> list[dict[str, Any]]:
-    """Load a ``*_results.jsonl`` file; every record needs ``task_id`` and ``result``."""
+    """Load a ``*_results.jsonl`` file.
+
+    Every record needs a ``task_id`` string and a ``result`` string that
+    :func:`categorize` accepts; the :class:`DataError` for a bad record names
+    the file and line.
+    """
     path = Path(path)
     if not path.is_file():
         raise DataError(f"{path}: no such results file", details={"path": str(path)})
@@ -89,8 +106,12 @@ def read_results(path: str | Path) -> list[dict[str, Any]]:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise DataError(f"{path}:{number}: invalid JSON: {exc.msg}") from exc
-            if not isinstance(record, dict) or not {"task_id", "result"} <= record.keys():
+            if not isinstance(record, dict):
                 raise DataError(f"{path}:{number}: record needs task_id and result")
+            try:
+                categorize(_fields(record)[1])
+            except DataError as exc:
+                raise DataError(f"{path}:{number}: {exc}", details=exc.details) from exc
             records.append(record)
     if not records:
         raise DataError(f"{path}: no result records", details={"path": str(path)})

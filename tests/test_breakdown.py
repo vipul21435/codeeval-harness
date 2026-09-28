@@ -120,8 +120,11 @@ def test_demo_shaped_records_are_passes_and_fails_only(tmp_path: Path) -> None:
     ("text", "message"),
     [
         ("{not json}\n", r":1: invalid JSON"),
-        ('{"task_id": "T/0"}\n', r":1: record needs task_id and result"),
+        ('{"task_id": "T/0"}\n', r":1: record needs a task_id string and a result string"),
         ('{"task_id": "T/0", "result": "passed"}\n[1, 2]\n', r":2: record needs task_id"),
+        ('{"task_id": ["x"], "result": 5}\n', r":1: record needs a task_id string"),
+        ('{"task_id": "T/0", "result": "ok"}\n{"task_id": "T/0", "result": 5}\n', r":2: record"),
+        ('{"task_id": "T/0", "result": "crashed"}\n', r":1: unknown result string"),
         ("\n\n", "no result records"),
     ],
 )
@@ -130,6 +133,13 @@ def test_read_results_names_the_bad_line(tmp_path: Path, text: str, message: str
     path.write_text(text, encoding="utf-8")
     with pytest.raises(DataError, match=message):
         read_results(path)
+
+
+def test_breakdown_rejects_records_without_string_fields() -> None:
+    with pytest.raises(DataError, match="record needs a task_id string and a result string"):
+        breakdown([{"task_id": "T/0"}])
+    with pytest.raises(DataError, match="record needs a task_id string"):
+        breakdown([{"task_id": 3, "result": "passed"}])
 
 
 def test_read_results_missing_file(tmp_path: Path) -> None:
