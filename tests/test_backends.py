@@ -111,6 +111,13 @@ def test_mock_from_pairs() -> None:
     assert backend.complete("t/0", "p", n=2) == ["a", "b"]
 
 
+def test_mock_rejects_an_empty_canned_mapping() -> None:
+    with pytest.raises(ConfigError, match="at least one canned completion"):
+        MockBackend.from_pairs([])
+    with pytest.raises(ConfigError, match="at least one canned completion"):
+        MockBackend({})
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [

@@ -103,6 +103,10 @@ class MockBackend:
                 details={"failure_rate": self.failure_rate},
             )
         self.canned = {task_id: tuple(items) for task_id, items in self.canned.items()}
+        if not self.canned:
+            raise ConfigError(
+                "the mock backend needs at least one canned completion", details={"tasks": 0}
+            )
         empty = sorted(task_id for task_id, items in self.canned.items() if not items)
         if empty:
             raise ConfigError(
