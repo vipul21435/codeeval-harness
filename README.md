@@ -89,9 +89,12 @@ lists the commits.
   `sandbox_error` (the worker died), counted per task and per run from a
   `*_results.jsonl` file whose malformed lines are reported by file and line.
 - **Run-to-run regression diff** (`codeeval.diff`): compares the per-task
-  pass counts of two result files and groups tasks into regressed, improved,
-  unchanged, added and removed; `RunDiff.ok` is false when any task lost a
-  pass or disappeared, so a CI gate can compare a run against a baseline.
+  pass rate (passes / samples, as an exact `Fraction`) of two result files
+  and groups tasks into regressed, improved, unchanged, added and removed;
+  `RunDiff.ok` is false when any task's rate dropped or the task disappeared,
+  so a CI gate can compare a run against a baseline even when the two runs
+  drew a different number of samples per task (`TaskChange.delta` is the
+  rate change, not a count).
 
 ## Architecture
 
@@ -183,7 +186,7 @@ $ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_fi
 | `codeeval.backends.ModelBackend`, `MockBackend.from_jsonl(path, seed=0, failure_rate=0.0)`, `OpenAIBackend(base_url, model, api_key, timeout=60, retries=2)`, `make_backend("mock"\|"openai", canned=..., pairs=...)`, `generate_samples(backend, [(task_id, prompt), ...], n=1)`, `write_samples(path, samples)`, `reference_completions(suite)` | model backends and sample generation; `ProviderError` when a backend cannot answer, `ConfigError` for a missing key or a missing or empty canned set |
 | `codeeval.metrics.pass_at_k(n, c, k)`, `mean_pass_at_k(counts, k)`, `bootstrap_pass_at_k(counts, k, resamples=1000, confidence=0.95, seed=0)` | the unbiased pass@k estimator for one task, its mean over `(n, c)` counts, and a seeded percentile bootstrap over tasks returning `PassAtK(estimate, low, high, ...)`; `DataError` for `c > n`, `k > n`, an empty suite or a confidence outside (0, 1) |
 | `codeeval.breakdown.categorize(result)`, `breakdown(records)`, `read_results(path)` | `Category` (`pass`, `fail`, `timeout`, `syntax_error`, `sandbox_error`) for one result string, a `Breakdown` with `.run` and `.tasks` counters and `.counts()` listing every category, and the results-file loader; `DataError` names the file and line of a bad record |
-| `codeeval.diff.diff_results(before, after)` | a `RunDiff` of `TaskChange(task_id, before=(samples, passes), after=(samples, passes))` lists (`regressed`, `improved`, `unchanged`) plus `added` and `removed` task ids; `.ok` when nothing regressed or vanished |
+| `codeeval.diff.diff_results(before, after)` | a `RunDiff` of `TaskChange(task_id, before=(samples, passes), after=(samples, passes))` lists (`regressed`, `improved`, `unchanged`, by pass rate; `.delta` is the `Fraction` rate change) plus `added` and `removed` task ids; `.ok` when no rate dropped and nothing vanished |
 | `codeeval.settings.get_settings()`, `override_settings(**changes)` | typed settings, cached per process; the override is how tests pin values |
 | `codeeval.log.configure_logging()`, `bind_context(run_id=...)` | the JSON logger and its bound context |
 | `codeeval.errors.CodeEvalError` and `ConfigError`, `DataError`, `ProviderError`, `ExecutionError`, `GradingError`, `StorageError` | the exception hierarchy, one class per pipeline stage |

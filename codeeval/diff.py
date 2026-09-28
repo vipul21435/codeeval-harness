@@ -1,16 +1,18 @@
 """Run-to-run regression diff between two evaluator result files.
 
-:func:`diff_results` compares the per-task pass counts of a *before* and an
-*after* run (records as :func:`codeeval.breakdown.read_results` returns
-them) and sorts every task into ``regressed`` (fewer passes), ``improved``
-(more passes), ``unchanged``, ``added`` (only in *after*) or ``removed``
-(only in *before*).
+:func:`diff_results` compares the per-task pass *rate* (passes / samples) of
+a *before* and an *after* run (records as :func:`codeeval.breakdown.read_results`
+returns them) and sorts every task into ``regressed`` (lower rate), ``improved``
+(higher rate), ``unchanged``, ``added`` (only in *after*) or ``removed`` (only
+in *before*). Rates are exact :class:`fractions.Fraction` values, so runs with
+different sample counts per task compare correctly (5/10 equals 1/2).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import Any
 
 from codeeval.breakdown import Category, breakdown
@@ -25,13 +27,24 @@ class TaskChange:
     after: tuple[int, int]
 
     @property
-    def delta(self) -> int:
-        return self.after[1] - self.before[1]
+    def before_rate(self) -> Fraction:
+        """Exact pass rate in the *before* run."""
+        return Fraction(self.before[1], self.before[0])
+
+    @property
+    def after_rate(self) -> Fraction:
+        """Exact pass rate in the *after* run."""
+        return Fraction(self.after[1], self.after[0])
+
+    @property
+    def delta(self) -> Fraction:
+        """Change in pass rate (not in pass count) from *before* to *after*."""
+        return self.after_rate - self.before_rate
 
 
 @dataclass(frozen=True, slots=True)
 class RunDiff:
-    """Tasks grouped by how their pass count moved between two runs."""
+    """Tasks grouped by how their pass rate moved between two runs."""
 
     regressed: list[TaskChange] = field(default_factory=list)
     improved: list[TaskChange] = field(default_factory=list)
@@ -55,7 +68,7 @@ def _passes(records: Iterable[Mapping[str, Any]]) -> dict[str, tuple[int, int]]:
 def diff_results(
     before: Iterable[Mapping[str, Any]], after: Iterable[Mapping[str, Any]]
 ) -> RunDiff:
-    """Group tasks by the change in passes from ``before`` to ``after``."""
+    """Group tasks by the change in pass rate from ``before`` to ``after``."""
     old, new = _passes(before), _passes(after)
     diff = RunDiff(added=sorted(new.keys() - old.keys()), removed=sorted(old.keys() - new.keys()))
     for task_id in sorted(old.keys() & new.keys()):
