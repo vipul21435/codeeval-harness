@@ -71,6 +71,9 @@ markers = [
 [tool.coverage.run]
 source = ["codeeval", "human_eval"]
 branch = true
+# Measure the worker interpreters too: they are started with subprocess and
+# leave through os._exit, which would otherwise skip the coverage save.
+patch = ["subprocess", "_exit"]
 
 [tool.coverage.report]
 show_missing = true

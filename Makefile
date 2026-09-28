@@ -33,5 +33,5 @@ coverage:  ## Run the tests with branch coverage
 check: lint typecheck test  ## Everything CI runs: lint, typecheck, test
 
 clean:  ## Remove caches and build artifacts
-	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov dist build
+	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage .coverage.* htmlcov dist build
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

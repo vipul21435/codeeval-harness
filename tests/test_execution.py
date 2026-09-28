@@ -13,6 +13,7 @@ from human_eval.execution import (
     TimeoutException,
     WorkerError,
     build_check_program,
+    chdir,
     check_correctness,
     create_tempdir,
     swallow_io,
@@ -93,6 +94,45 @@ def test_completion_that_swallows_the_alarm_is_killed(example_problem: dict[str,
     result = check_correctness(example_problem, completion, timeout=0.5)
     assert result["result"] == "timed out"
     assert time.monotonic() - started < 10
+
+
+def test_completion_that_ignores_the_alarm_is_killed(example_problem: dict[str, Any]) -> None:
+    # With SIGALRM ignored the worker's own timer cannot stop it; the parent's
+    # deadline has to.
+    completion = (
+        "    import signal, time\n"
+        "    signal.signal(signal.SIGALRM, signal.SIG_IGN)\n"
+        "    time.sleep(30)"
+    )
+    started = time.monotonic()
+    result = check_correctness(example_problem, completion, timeout=0.5)
+    assert result["result"] == "timed out"
+    assert time.monotonic() - started < 10
+
+
+def test_closing_the_pipes_early_does_not_end_the_wait(example_problem: dict[str, Any]) -> None:
+    # EOF on the worker's stdout and stderr is not the same as the worker exiting.
+    completion = (
+        "    import os, signal, time\n"
+        "    signal.signal(signal.SIGALRM, signal.SIG_IGN)\n"
+        "    os.close(1)\n"
+        "    os.close(2)\n"
+        "    time.sleep(30)"
+    )
+    started = time.monotonic()
+    result = check_correctness(example_problem, completion, timeout=0.5)
+    assert result["result"] == "timed out"
+    assert time.monotonic() - started < 10
+
+
+def test_failure_reason_falls_back_to_the_exception_type(example_problem: dict[str, Any]) -> None:
+    completion = (
+        "    class Broken(Exception):\n"
+        "        def __str__(self):\n"
+        "            raise RuntimeError('no message for you')\n"
+        "    raise Broken()"
+    )
+    assert check_correctness(example_problem, completion, timeout=2.0)["result"] == "failed: Broken"
 
 
 def test_slow_interpreter_start_does_not_count_against_the_timeout(
@@ -268,6 +308,13 @@ def test_swallow_io_hides_output_and_blocks_input(capsys: pytest.CaptureFixture[
         print("hidden too", file=sys.stderr)
         with pytest.raises(OSError, match="stdin is not readable"):
             input()
+        with pytest.raises(OSError, match="stdin is not readable"):
+            sys.stdin.read()
+        with pytest.raises(OSError, match="stdin is not readable"):
+            sys.stdin.readline()
+        with pytest.raises(OSError, match="stdin is not readable"):
+            sys.stdin.readlines()
+        assert not sys.stdin.readable()
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -281,6 +328,13 @@ def test_create_tempdir_changes_and_restores_cwd() -> None:
         assert inside != before
     assert Path.cwd() == before
     assert not Path(dirname).exists()
+
+
+def test_chdir_dot_is_a_no_op() -> None:
+    before = Path.cwd()
+    with chdir("."):
+        assert Path.cwd() == before
+    assert Path.cwd() == before
 
 
 def test_reliability_guard_disables_destructive_functions() -> None:
