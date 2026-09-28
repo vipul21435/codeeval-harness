@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeServer
+from conftest import TASKS_DIR, FakeServer
 
 from codeeval import __version__
 from codeeval.backends import STUB_COMPLETION
@@ -87,6 +87,20 @@ def test_data_errors_become_exit_status_2(
     assert main(["validate", str(tmp_path / "missing.jsonl")]) == EXIT_ERROR
     err = capsys.readouterr().err
     assert err.startswith("verifybench: DataError: cannot read task file")
+
+
+def test_bad_setting_is_one_line_and_exit_status_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # configure_logging() loads the settings before any command runs; a bad
+    # variable must surface as the documented one-liner, not a traceback.
+    monkeypatch.setenv("VERIFYBENCH_WORKERS", "abc")
+    assert main(["validate", str(TASKS_DIR / "humaneval_mini.jsonl")]) == EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = captured.err.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("verifybench: ConfigError: invalid settings: VERIFYBENCH_WORKERS")
 
 
 def test_convert_passes_arguments_through(

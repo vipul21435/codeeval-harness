@@ -229,8 +229,10 @@ COMMANDS = {
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    configure_logging()
     try:
+        # Inside the try: configure_logging() loads the settings, so a bad
+        # VERIFYBENCH_* variable is a ConfigError reported like any other.
+        configure_logging()
         with bind_context(run_id=uuid.uuid4().hex[:12], command=args.command):
             return COMMANDS[args.command](args)
     except CodeEvalError as exc:
