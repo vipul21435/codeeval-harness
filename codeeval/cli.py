@@ -45,8 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
     demo = commands.add_parser(
         "demo",
         help="validate the bundled HumanEval mini suite and score it (no network, no model)",
-        description="Validate a task suite with the fail-to-pass validator, then score the "
-        "canonical solution and a NotImplementedError stub per task with pass@k.",
+        description="Generate two completions per task with the mock backend (the canonical "
+        "solution, then a NotImplementedError stub), validate the suite with the "
+        "fail-to-pass validator, then score the samples with pass@k. Offline: no network, "
+        "no model key.",
     )
     demo.add_argument(
         "--tasks",

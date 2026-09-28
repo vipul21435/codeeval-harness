@@ -27,6 +27,16 @@ def test_help_lists_commands(capsys: pytest.CaptureFixture[str]) -> None:
     assert "generate" in out
 
 
+def test_demo_help_describes_all_three_phases(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as info:
+        main(["demo", "--help"])
+    assert info.value.code == 0
+    out = capsys.readouterr().out
+    assert "mock backend" in out
+    assert "validate" in out
+    assert "pass@k" in out
+
+
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as info:
         main(["--version"])
