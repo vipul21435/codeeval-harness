@@ -29,7 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vipul21435/codeeval-harness"
+Homepage = "https://github.com/vipul21435/verifybench"
+Repository = "https://github.com/vipul21435/verifybench"
+Issues = "https://github.com/vipul21435/verifybench/issues"
 Upstream = "https://github.com/openai/human-eval"
 
 [project.scripts]

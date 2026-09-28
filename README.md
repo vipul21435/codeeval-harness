@@ -1,6 +1,8 @@
-# codeeval-harness
+Forked from https://github.com/openai/human-eval.
 
-An evaluation harness for LLM-generated code, built on OpenAI's
+# verifybench
+
+VerifyBench is an evaluation harness for LLM-generated code, built on OpenAI's
 [human-eval](https://github.com/openai/human-eval): the HumanEval dataset and
 the pass@k evaluator from the paper "[Evaluating Large Language Models Trained
 on Code](https://arxiv.org/abs/2107.03374)".
@@ -16,7 +18,7 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
 - a Typer CLI and a FastAPI service
 - a deterministic stub model provider so the whole pipeline runs offline
 
-## Changes from upstream so far
+## What I built on top
 
 - `pyproject.toml` with a [hatchling](https://hatch.pypa.io/) build and
   dependencies locked with [uv](https://docs.astral.sh/uv/) on Python 3.12.
@@ -53,8 +55,8 @@ Requires [uv](https://docs.astral.sh/uv/getting-started/installation/); it
 installs Python 3.12 itself if needed.
 
 ```
-$ git clone https://github.com/vipul21435/codeeval-harness
-$ cd codeeval-harness
+$ git clone https://github.com/vipul21435/verifybench
+$ cd verifybench
 $ make install    # uv sync + pre-commit install
 ```
 
