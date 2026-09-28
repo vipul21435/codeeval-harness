@@ -34,6 +34,10 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
 - A pass is derived from the worker's exit status. Upstream let the completion
   share the interpreter with a `Manager` list and trusted whatever was in it, so
   a completion could append `"passed"` itself.
+- `reliability_guard` also disables `os._exit`, `exec*` and `posix_spawn*`
+  (so a completion cannot choose the worker's exit status), applies the `os`
+  denylist to the `posix` module too (`__import__("posix").getcwd()` used to
+  work around `os.getcwd = None`), and blocks `ctypes`.
 - `--k=1,2,4` no longer crashes (`fire` passes it as a tuple), and pass@k values
   are plain floats rather than `np.float64`.
 - Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
@@ -61,9 +65,12 @@ next item on the roadmap.
 The same caveat applies to grading: the completion shares its interpreter with
 the code that runs the tests. The harness never reads the verdict from an
 object the completion can reach (a pass requires the worker to exit with
-status 0, which only happens after the tests ran through), but a completion
-that goes looking for the harness's own references can still forge a pass.
-Treat pass@k on adversarial completions with suspicion until the sandbox lands.
+status 0, which only happens after the tests ran through), and the guard
+disables `os._exit`, the `exec*` and `posix_spawn*` functions, their `posix`
+module aliases and `ctypes`, which would let a completion pick its own exit
+status. A completion that goes looking for the harness's own references can
+still forge a pass, though. Treat pass@k on adversarial completions with
+suspicion until the sandbox lands.
 
 Generate samples and save them as JSON Lines, one sample per line:
 

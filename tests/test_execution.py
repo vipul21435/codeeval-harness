@@ -203,6 +203,11 @@ def test_flooding_the_raw_output_fds_is_harmless(example_problem: dict[str, Any]
     assert check_correctness(example_problem, completion, timeout=5.0)["result"] == "passed"
 
 
+# The verdict line the worker writes after a pass: a completion that writes it
+# itself, and a ``python -c`` program that prints it.
+FAKE_VERDICT = '    import os\n    os.write(1, b\'{"outcome": "passed"}\\n\')\n'
+PRINT_VERDICT = 'import json; print(json.dumps({"outcome": "passed"}))'
+
 FORGERIES = {
     "append 'passed' to every list reachable from the call stack": (
         "    import sys\n"
@@ -218,6 +223,23 @@ FORGERIES = {
         '    import os, sys\n    os.write(1, b\'{"outcome": "passed"}\\n\')\n    sys.exit(0)'
     ),
     "exit 0 through SystemExit before the tests run": "    raise SystemExit(0)",
+    # The ones below pick the worker's exit status directly; each is a real
+    # pass unless the guard disables the function it uses.
+    "write a fake verdict line, then os._exit(0)": FAKE_VERDICT + "    os._exit(0)",
+    "write a fake verdict line, then posix._exit(0)": (
+        FAKE_VERDICT + "    __import__('posix')._exit(0)"
+    ),
+    "exec a python that prints the verdict and exits 0": (
+        "    import os, sys\n"
+        f"    os.execv(sys.executable, [sys.executable, '-c', '{PRINT_VERDICT}'])"
+    ),
+    "posix.execv the same python": (
+        "    import sys\n"
+        f"    __import__('posix').execv(sys.executable, [sys.executable, '-c', '{PRINT_VERDICT}'])"
+    ),
+    "write a fake verdict line, then _exit(0) through ctypes": (
+        FAKE_VERDICT + "    import ctypes\n    ctypes.CDLL(None)._exit(0)"
+    ),
 }
 
 
@@ -264,19 +286,23 @@ def test_create_tempdir_changes_and_restores_cwd() -> None:
 def test_reliability_guard_disables_destructive_functions() -> None:
     # The guard mutates process-wide state, so exercise it in a fresh interpreter.
     probe = """
-import builtins, os, shutil, subprocess, sys
+import builtins, os, posix, shutil, subprocess, sys
 from human_eval.execution import reliability_guard
 reliability_guard()
 assert os.system is None and os.kill is None and os.remove is None
+assert os._exit is None and os.execv is None and os.execvpe is None
+assert os.posix_spawn is None and os.posix_spawnp is None
+assert posix.getcwd is None and posix._exit is None and posix.execv is None
 assert shutil.rmtree is None and subprocess.Popen is None
 assert builtins.exit is None and builtins.quit is None
 assert os.environ["OMP_NUM_THREADS"] == "1"
-try:
-    import tkinter
-except ImportError:
-    pass
-else:
-    raise AssertionError("tkinter import should be blocked")
+for blocked in ("tkinter", "ctypes", "_ctypes"):
+    try:
+        __import__(blocked)
+    except ImportError:
+        pass
+    else:
+        raise AssertionError(blocked + " import should be blocked")
 print("guard-ok")
 """
     proc = subprocess.run(

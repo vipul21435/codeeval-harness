@@ -354,7 +354,9 @@ def chdir(root: str) -> Iterator[None]:
         os.chdir(cwd)
 
 
-# Names disabled by reliability_guard, grouped by the module they live on.
+# Names disabled by reliability_guard, grouped by the module they live on. The
+# os names are disabled on the posix module as well, since os re-exports it and
+# ``__import__("posix")`` would otherwise hand back every function untouched.
 _DISABLED_BUILTINS = ("exit", "quit", "help")
 _DISABLED_OS_FUNCTIONS = (
     "kill",
@@ -383,9 +385,23 @@ _DISABLED_OS_FUNCTIONS = (
     "lchown",
     "getcwd",
     "chdir",
+    # Ways to end or replace the worker process with an exit status of the
+    # program's choosing, which is what the parent grades a pass from.
+    "_exit",
+    "execl",
+    "execle",
+    "execlp",
+    "execlpe",
+    "execv",
+    "execve",
+    "execvp",
+    "execvpe",
+    "posix_spawn",
+    "posix_spawnp",
 )
 _DISABLED_SHUTIL_FUNCTIONS = ("rmtree", "move", "chown")
-_BLOCKED_MODULES = ("ipdb", "joblib", "resource", "psutil", "tkinter")
+# ctypes would give back every disabled function through libc.
+_BLOCKED_MODULES = ("ipdb", "joblib", "resource", "psutil", "tkinter", "ctypes", "_ctypes")
 
 
 def reliability_guard(maximum_memory_bytes: int | None = None) -> None:
@@ -416,8 +432,18 @@ def reliability_guard(maximum_memory_bytes: int | None = None) -> None:
 
     os.environ["OMP_NUM_THREADS"] = "1"
 
+    # importlib._bootstrap_external calls posix.getcwd, posix.replace and
+    # posix.unlink directly: getcwd to resolve relative sys.path entries and the
+    # other two to write bytecode caches. Make both unnecessary so that imports
+    # keep working once the posix names below are gone.
+    sys.path[:] = [os.path.abspath(entry) for entry in sys.path]
+    sys.dont_write_bytecode = True
+
+    posix = sys.modules.get("posix")
     for name in _DISABLED_OS_FUNCTIONS:
         setattr(os, name, None)
+        if posix is not None and hasattr(posix, name):
+            setattr(posix, name, None)
 
     for name in _DISABLED_SHUTIL_FUNCTIONS:
         setattr(shutil, name, None)
