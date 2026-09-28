@@ -114,6 +114,8 @@ git clone https://github.com/vipul21435/verifybench && cd verifybench
 uv sync
 make demo
 uv run verifybench validate data/tasks/humaneval_mini.jsonl
+uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl
+uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4
 docker build -t verifybench:dev . && docker run --rm verifybench:dev
 ```
 
@@ -258,6 +260,28 @@ completion, and the estimator is unbiased. A grader that accepted the stub
 would show `baseline_passes` in the `f2p` column and `passed` under `stub`,
 and the demo would exit 1.
 
+The same generate step with a partly failing "model": the mock replays each
+task's reference solution but swaps a seeded 25% of completions for the
+stub, and the upstream evaluator scores the result against the problem
+subset the demo wrote (JSON log records omitted):
+
+```
+$ uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl
+80 samples from mock for 20 tasks -> results/mock/samples.jsonl
+$ uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4
+Reading samples...
+Running test suites...
+Writing results to results/mock/samples.jsonl_results.jsonl...
+{'pass@1': 0.65, 'pass@2': 0.8833333333333332, 'pass@4': 1.0}
+```
+
+With seed 0 the draw stubbed 28 of the 80 completions (35%, the expected
+25% plus sampling noise), so pass@1 is 0.65 and every task still has at
+least one passing sample, hence pass@4 = 1.0. `--backend openai` runs the
+same pipeline against a live OpenAI-compatible endpoint once
+`VERIFYBENCH_OPENAI_API_KEY` (and, for a local server,
+`VERIFYBENCH_OPENAI_BASE_URL`) is set; nothing is sent otherwise.
+
 One JSON log record from the same run:
 
 ```
@@ -317,10 +341,13 @@ resample.
 
 | What | Command | Result |
 | --- | --- | --- |
-| Offline demo, 20 tasks | `time make demo` | 7.6 s wall-clock (real 7.62, user 17.06, sys 4.07) |
-| Fail-to-pass validation inside the demo | part of `make demo` | 120 grader runs (20 tasks x 2 solutions x 3 repeats) in 6.9 s with 4 workers, i.e. about 17 pytest runs/s |
-| pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.4 s with 4 workers, i.e. about 100 samples/s (each in a fresh interpreter) |
-| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 465 tests in 46.3 s; 99% line and branch coverage (1137 statements, 8 missed) |
+| Offline demo, 20 tasks | `time make demo` | 8.9 s wall-clock (real 8.92, user 22.66, sys 5.36) |
+| Sample generation inside the demo | part of `make demo` | 40 completions from the mock backend in under 0.05 s (reported as 0.0 s) |
+| Fail-to-pass validation inside the demo | part of `make demo` | 120 grader runs (20 tasks x 2 solutions x 3 repeats) in 8.2 s with 4 workers, i.e. about 15 pytest runs/s |
+| pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.5 s with 4 workers, i.e. about 80 samples/s (each in a fresh interpreter) |
+| Mock generation, 20 tasks x 4 samples | `time uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl` | 80 samples in 0.50 s wall-clock, interpreter start-up included |
+| Upstream evaluator on those 80 samples | `time uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4` | 1.58 s wall-clock; pass@1 0.65, pass@2 0.883, pass@4 1.0 |
+| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 517 tests in 64.8 s; 99% line and branch coverage (1393 statements, 8 missed); `codeeval.backends` and `codeeval.demo` at 100% |
 | Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | 22.4 s wall-clock (pip install of the locked dependencies included; Docker Desktop VM with 8 CPUs and 4 GB) |
 | Demo inside the container | `time docker run --rm verifybench:dev` | 28.8 s wall-clock, same 120 grader runs and 40 completions, inside the 4 GB Docker Desktop VM |
 
