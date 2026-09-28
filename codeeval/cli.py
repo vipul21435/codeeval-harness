@@ -6,7 +6,9 @@ Commands:
   :mod:`codeeval.demo`);
 - ``validate``: run the fail-to-pass validator on a task file and print one
   verdict per task, exit status 1 when any task is not ``ok``;
-- ``convert``: port HumanEval problems to a task file (:mod:`codeeval.convert`).
+- ``convert``: port HumanEval problems to a task file (:mod:`codeeval.convert`);
+- ``generate``: sample completions for a task file from a model backend
+  (:mod:`codeeval.backends`) into a ``samples.jsonl`` the evaluator scores.
 
 Every command configures the structured logger from the settings and binds a
 ``run_id`` to its records. A :class:`~codeeval.errors.CodeEvalError` is
@@ -20,6 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from codeeval import __version__
+from codeeval.backends import BACKEND_NAMES
 from codeeval.errors import CodeEvalError
 from codeeval.log import bind_context, configure_logging
 
@@ -85,7 +88,50 @@ def build_parser() -> argparse.ArgumentParser:
         description="Arguments are passed to python -m codeeval.convert.",
     )
     convert.add_argument("args", nargs=argparse.REMAINDER)
+
+    generate = commands.add_parser(
+        "generate",
+        help="sample completions for a task file from a model backend",
+        description="Ask a model backend for N completions per task and write them as a "
+        "samples file for evaluate_functional_correctness. The mock backend replays a "
+        "canned file or, without one, each task's reference solution (a perfect model) "
+        "and is fully offline; the openai backend needs VERIFYBENCH_OPENAI_API_KEY.",
+    )
+    generate.add_argument(
+        "--backend",
+        choices=BACKEND_NAMES,
+        default=None,
+        help="model backend (default: VERIFYBENCH_MODEL_BACKEND, mock)",
+    )
+    generate.add_argument("--tasks", type=Path, required=True, help="JSONL task file")
+    generate.add_argument(
+        "--n", type=positive_int, default=1, help="completions per task (default: %(default)s)"
+    )
+    generate.add_argument("--out", type=Path, required=True, help="samples file to write")
+    generate.add_argument("--limit", type=positive_int, default=None, help="first N tasks only")
+    generate.add_argument(
+        "--canned", type=Path, default=None, help="mock only: samples file to replay per task id"
+    )
+    generate.add_argument(
+        "--failure-rate",
+        type=float,
+        default=None,
+        help="mock only: fraction of completions replaced by a stub (default: settings)",
+    )
+    generate.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="mock only: seed for the stub draw (default: settings)",
+    )
     return parser
+
+
+def positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {text}")
+    return value
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -125,7 +171,42 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return convert_main(args.args)
 
 
-COMMANDS = {"demo": cmd_demo, "validate": cmd_validate, "convert": cmd_convert}
+def cmd_generate(args: argparse.Namespace) -> int:
+    from codeeval.backends import (
+        generate_samples,
+        make_backend,
+        reference_completions,
+        write_samples,
+    )
+    from codeeval.demo import display_path
+    from codeeval.settings import get_settings
+    from codeeval.tasks import TaskSuite, read_tasks
+
+    suite = read_tasks(args.tasks)
+    if args.limit is not None:
+        suite = TaskSuite(tasks=suite.tasks[: args.limit])
+    name = args.backend if args.backend is not None else get_settings().model_backend
+    backend = make_backend(
+        name,
+        canned=args.canned,
+        pairs=reference_completions(suite),
+        failure_rate=args.failure_rate,
+        seed=args.seed,
+    )
+    samples = generate_samples(
+        backend, [(task.task_id, task.prompt) for task in suite.tasks], n=args.n
+    )
+    count = write_samples(args.out, samples)
+    print(f"{count} samples from {backend.name} for {len(suite)} tasks -> {display_path(args.out)}")
+    return EXIT_OK
+
+
+COMMANDS = {
+    "demo": cmd_demo,
+    "validate": cmd_validate,
+    "convert": cmd_convert,
+    "generate": cmd_generate,
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -139,4 +220,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_ERROR
 
 
-__all__ = ["EXIT_ERROR", "EXIT_MISMATCH", "EXIT_OK", "PROG", "build_parser", "main"]
+__all__ = [
+    "EXIT_ERROR",
+    "EXIT_MISMATCH",
+    "EXIT_OK",
+    "PROG",
+    "build_parser",
+    "main",
+    "positive_int",
+]

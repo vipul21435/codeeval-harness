@@ -69,6 +69,13 @@ lists the commits.
   coverage, a digest-pinned non-root `python:3.12-slim` image that runs the
   demo, a compose file, and a CI job that builds the image and runs the demo
   in it.
+- **Model backends and sample generation** (`codeeval.backends`): a
+  `ModelBackend` protocol with a deterministic `MockBackend` (replays canned
+  completions per task id, seeded stub failure rate) and an `OpenAIBackend`
+  for any OpenAI-compatible chat endpoint (stdlib HTTP, timeouts, retries,
+  off unless selected, key from `VERIFYBENCH_OPENAI_API_KEY`);
+  `verifybench generate` writes the `samples.jsonl` the evaluator scores.
+  Tests drive the HTTP client against a local fake server, never the network.
 
 ## Architecture
 
@@ -122,6 +129,7 @@ outputs kept in a named volume.
 | `verifybench demo [--tasks FILE] [--limit N] [--repeats N] [--workers N] [--timeout S] [--results-dir DIR]` | validates a task suite, then scores the canonical solution and a `NotImplementedError` stub per task with pass@1 and pass@2; writes `samples.jsonl`, `problems.jsonl`, the results file and `summary.json` under `<results-dir>/demo` | 0 when every task is `ok`, every canonical completion passed and every stub failed; 1 otherwise |
 | `verifybench validate FILE [--repeats N] [--workers N] [--timeout S]` | fail-to-pass validation of a JSONL task file; prints `task_id<TAB>verdict` per task and the verdict counts | 0 when all `ok`, 1 otherwise |
 | `verifybench convert OUTPUT [--limit N] [--problem-file FILE]` | ports HumanEval problems to a task file (`--limit 0` ports all 164) | 0 |
+| `verifybench generate --tasks FILE --out samples.jsonl [--backend mock\|openai] [--n K] [--limit N] [--canned FILE] [--failure-rate F] [--seed S]` | asks a model backend for K completions per task and writes `{task_id, completion, backend, index}` lines for `evaluate_functional_correctness`; `mock` (default) replays `--canned` or, without it, each task's reference solution and swaps a `--failure-rate` fraction for a `NotImplementedError` stub; `openai` needs `VERIFYBENCH_OPENAI_API_KEY` | 0; 2 on a missing key, an unknown task id in the canned file or a provider failure |
 
 Any `CodeEvalError` (unreadable file, invalid task, bad setting) is printed
 as one line on stderr and becomes exit status 2. Every command logs JSON
@@ -152,6 +160,7 @@ $ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_fi
 | `codeeval.f2p.validate_task(task, repeats=3, timeout=30.0)`, `validate_suite(suite, workers=None)` | fail-to-pass verdicts (`TaskVerdict`, `SuiteVerdict` with `.counts`, `.ok`, `.failures`) |
 | `codeeval.convert.humaneval_to_task(problem)`, `humaneval_to_tasks(limit=20)` | HumanEval problems to tasks |
 | `codeeval.demo.run_demo(tasks_file, limit=None, repeats=3)`, `render_report(report)` | the demo as a function returning a `DemoReport` |
+| `codeeval.backends.ModelBackend`, `MockBackend.from_jsonl(path, seed=0, failure_rate=0.0)`, `OpenAIBackend(base_url, model, api_key, timeout=60, retries=2)`, `make_backend("mock"\|"openai", canned=..., pairs=...)`, `generate_samples(backend, [(task_id, prompt), ...], n=1)`, `write_samples(path, samples)`, `reference_completions(suite)` | model backends and sample generation; `ProviderError` when a backend cannot answer, `ConfigError` for a missing key or canned file |
 | `codeeval.settings.get_settings()`, `override_settings(**changes)` | typed settings, cached per process; the override is how tests pin values |
 | `codeeval.log.configure_logging()`, `bind_context(run_id=...)` | the JSON logger and its bound context |
 | `codeeval.errors.CodeEvalError` and `ConfigError`, `DataError`, `ProviderError`, `ExecutionError`, `GradingError`, `StorageError` | the exception hierarchy, one class per pipeline stage |
@@ -160,7 +169,8 @@ $ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_fi
 | `human_eval.data.read_problems()`, `stream_jsonl`, `write_jsonl` | the packaged dataset and JSONL helpers |
 
 Not built yet (planned, see below): a FastAPI service, the SQLite results
-store, the Docker sandbox grader and the submission ledger. The settings
+store, the Docker sandbox grader, an Anthropic backend and the submission
+ledger. The settings
 already carry `sandbox_backend`, `docker_image` and `db_path` for them, but
 `sandbox_backend=docker` selects nothing today: completions always run in a
 local subprocess.
@@ -179,7 +189,14 @@ entry, which beats the default.
 | `VERIFYBENCH_RESULTS_DIR` | `results` | directory that receives run outputs (`results/demo` for the demo) |
 | `VERIFYBENCH_LOG_FORMAT` | `json` | log record format: `json` or `text` |
 | `VERIFYBENCH_LOG_LEVEL` | `INFO` | least severe log level emitted |
-| `VERIFYBENCH_SEED` | `0` | seed for everything randomised |
+| `VERIFYBENCH_SEED` | `0` | seed for everything randomised (the mock backend's stub draw) |
+| `VERIFYBENCH_MODEL_BACKEND` | `mock` | backend `verifybench generate` uses when `--backend` is not given: `mock` or `openai` |
+| `VERIFYBENCH_MOCK_FAILURE_RATE` | `0.0` | fraction of mock completions replaced by a `NotImplementedError` stub (0 to 1) |
+| `VERIFYBENCH_OPENAI_BASE_URL` | `https://api.openai.com/v1` | base URL of an OpenAI-compatible chat completions API (point it at a local server) |
+| `VERIFYBENCH_OPENAI_MODEL` | `gpt-4o-mini` | model name sent to that API |
+| `VERIFYBENCH_OPENAI_API_KEY` | unset | bearer token; the openai backend refuses to start without one and nothing is sent unless `--backend openai` is asked for |
+| `VERIFYBENCH_OPENAI_TIMEOUT` | `60.0` | seconds one HTTP request may take |
+| `VERIFYBENCH_OPENAI_RETRIES` | `2` | retries (backoff 0.5 s, 1 s, ...) after a transport error, HTTP 429 or 5xx |
 | `VERIFYBENCH_SANDBOX_BACKEND` | `subprocess` | reserved for the Docker grader; only `subprocess` does anything today |
 | `VERIFYBENCH_DOCKER_IMAGE` | `python:3.12-slim` | reserved for the Docker grader |
 | `VERIFYBENCH_DB_PATH` | `results/verifybench.sqlite` | reserved for the SQLite store |
@@ -310,11 +327,10 @@ cost scales linearly with the number of grader runs.
 
 In order of value:
 
-1. **Model backends.** A `Provider` interface with a deterministic offline
-   stub (seeded from `VERIFYBENCH_SEED`) plus OpenAI- and Anthropic-compatible
-   HTTP backends, so `verifybench run --provider stub` produces samples that
-   the existing evaluator scores. Keys stay in `.env`; the settings already
-   ignore extra keys for this.
+1. **More backends and concurrent generation.** An Anthropic Messages
+   backend beside the OpenAI-compatible one, prompt templates per task
+   suite, and `generate --workers N` so long suites are sampled in parallel
+   with per-task retries recorded on the sample.
 - **Docker sandbox grader.** Honour `VERIFYBENCH_SANDBOX_BACKEND=docker`:
   run each task's pytest in a digest-pinned container with no network, a
   read-only root, a pids limit and a memory limit (the compose file already

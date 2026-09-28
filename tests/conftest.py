@@ -1,8 +1,11 @@
 import copy
+import json
 import os
 import shutil
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -112,3 +115,61 @@ def make_task() -> Callable[..., Task]:
         return Task.model_validate({**SYNTHETIC_TASK, **overrides})
 
     return factory
+
+
+class FakeServer:
+    """An OpenAI-compatible chat completions endpoint with scripted responses."""
+
+    def __init__(self) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.headers: list[dict[str, str]] = []
+        self.responses: list[tuple[int, bytes]] = []
+        self.server = HTTPServer(("127.0.0.1", 0), self._handler())
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    @property
+    def base_url(self) -> str:
+        port = self.server.server_address[1]
+        return f"http://127.0.0.1:{port}/v1"
+
+    def script(self, *responses: tuple[int, object]) -> None:
+        self.responses = [
+            (status, body if isinstance(body, bytes) else json.dumps(body).encode("utf-8"))
+            for status, body in responses
+        ]
+
+    def _handler(self) -> type[BaseHTTPRequestHandler]:
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                fake.requests.append(json.loads(self.rfile.read(length)))
+                fake.headers.append(dict(self.headers.items()))
+                status, body = fake.responses.pop(0) if fake.responses else (500, b"{}")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        return Handler
+
+    def start(self) -> None:
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def fake_server() -> Iterator[FakeServer]:
+    """A scripted OpenAI-compatible server on 127.0.0.1; nothing leaves the machine."""
+    server = FakeServer()
+    server.start()
+    yield server
+    server.stop()

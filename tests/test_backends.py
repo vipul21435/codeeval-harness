@@ -5,13 +5,13 @@ thread; nothing leaves the machine.
 """
 
 import json
-import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import FakeServer
 
 from codeeval.backends import (
     STUB_COMPLETION,
@@ -21,10 +21,12 @@ from codeeval.backends import (
     Sample,
     generate_samples,
     make_backend,
+    reference_completions,
     write_samples,
 )
 from codeeval.errors import ConfigError, DataError, ProviderError
 from codeeval.settings import load_settings
+from codeeval.tasks import Task, TaskSuite
 
 CANNED = [
     {"task_id": "t/0", "completion": "    return a + b\n"},
@@ -137,65 +139,8 @@ def test_mock_from_jsonl_skips_blank_lines_and_reports_missing_file(tmp_path: Pa
 # --- OpenAIBackend -------------------------------------------------------------
 
 
-class FakeServer:
-    """An OpenAI-compatible chat completions endpoint with scripted responses."""
-
-    def __init__(self) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.headers: list[dict[str, str]] = []
-        self.responses: list[tuple[int, bytes]] = []
-        self.server = HTTPServer(("127.0.0.1", 0), self._handler())
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-
-    @property
-    def base_url(self) -> str:
-        port = self.server.server_address[1]
-        return f"http://127.0.0.1:{port}/v1"
-
-    def script(self, *responses: tuple[int, object]) -> None:
-        self.responses = [
-            (status, body if isinstance(body, bytes) else json.dumps(body).encode("utf-8"))
-            for status, body in responses
-        ]
-
-    def _handler(self) -> type[BaseHTTPRequestHandler]:
-        fake = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                length = int(self.headers.get("Content-Length", "0"))
-                fake.requests.append(json.loads(self.rfile.read(length)))
-                fake.headers.append(dict(self.headers.items()))
-                status, body = fake.responses.pop(0) if fake.responses else (500, b"{}")
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, format: str, *args: Any) -> None:
-                pass
-
-        return Handler
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def stop(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-
-
 def chat_response(*contents: str) -> dict[str, Any]:
     return {"choices": [{"message": {"role": "assistant", "content": text}} for text in contents]}
-
-
-@pytest.fixture
-def fake_server() -> Iterator[FakeServer]:
-    server = FakeServer()
-    server.start()
-    yield server
-    server.stop()
 
 
 @pytest.fixture
@@ -344,9 +289,28 @@ def test_make_backend_mock_reads_settings(canned_file: Path) -> None:
     assert (overridden.seed, overridden.failure_rate) == (9, 0.0)
 
 
-def test_make_backend_mock_needs_a_canned_file() -> None:
+def test_make_backend_mock_needs_a_canned_file_or_pairs() -> None:
     with pytest.raises(ConfigError, match="canned"):
         make_backend("mock", settings=load_settings())
+    backend = make_backend("mock", settings=load_settings(), pairs=[("t/0", "x")])
+    assert backend.complete("t/0", "p") == ["x"]
+
+
+def test_reference_completions_strip_the_prompt_when_present(
+    make_task: Callable[..., Task],
+) -> None:
+    prompt = 'def add(a: int, b: int) -> int:\n    """Return the sum of a and b."""\n'
+    ported = make_task(
+        task_id="h/0", prompt=prompt, reference_solution=prompt + "    return a + b\n"
+    )
+    other = make_task(task_id="h/1")  # reference without the docstring: replayed whole
+    pairs = reference_completions(TaskSuite(tasks=[ported, other]))
+    assert pairs == [
+        ("h/0", "    return a + b\n"),
+        ("h/1", "def add(a: int, b: int) -> int:\n    return a + b\n"),
+    ]
+    backend = MockBackend.from_pairs(pairs)
+    assert backend.complete("h/0", prompt) == ["    return a + b\n"]
 
 
 def test_make_backend_openai_reads_settings_and_needs_a_key() -> None:

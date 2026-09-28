@@ -39,6 +39,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from codeeval.errors import ConfigError, DataError, ProviderError
 from codeeval.settings import Settings, get_settings
+from codeeval.tasks import TaskSuite
 
 log = logging.getLogger(__name__)
 
@@ -315,28 +316,49 @@ class OpenAIBackend:
         return out[:n]
 
 
+def reference_completions(suite: TaskSuite) -> list[tuple[str, str]]:
+    """``(task_id, completion)`` per task: the reference solution minus the prompt.
+
+    A reference module that starts with the prompt (every converted HumanEval
+    task does) yields the body that follows it, which is exactly what the
+    upstream evaluator appends to the prompt again; any other reference is
+    used whole. Feeding these to the mock gives a "perfect model".
+    """
+    pairs: list[tuple[str, str]] = []
+    for task in suite.tasks:
+        reference = task.reference_solution
+        body = reference[len(task.prompt) :] if reference.startswith(task.prompt) else reference
+        pairs.append((task.task_id, body))
+    return pairs
+
+
 def make_backend(
     name: str,
     *,
     settings: Settings | None = None,
     canned: PathLike | None = None,
+    pairs: Iterable[tuple[str, str]] | None = None,
     failure_rate: float | None = None,
     seed: int | None = None,
 ) -> ModelBackend:
     """A backend by name from the settings.
 
-    ``mock`` needs ``canned`` (a samples JSONL file); ``openai`` needs
+    ``mock`` replays ``canned`` (a samples JSONL file) or, failing that,
+    ``pairs`` of ``(task_id, completion)``; ``openai`` needs
     ``VERIFYBENCH_OPENAI_API_KEY``. ``failure_rate`` and ``seed`` override the
     settings for the mock.
     """
     settings = get_settings() if settings is None else settings
     if name == "mock":
-        if canned is None:
-            raise ConfigError("the mock backend needs a canned completions file", details={})
-        return MockBackend.from_jsonl(
-            canned,
-            seed=settings.seed if seed is None else seed,
-            failure_rate=settings.mock_failure_rate if failure_rate is None else failure_rate,
+        mock_seed = settings.seed if seed is None else seed
+        rate = settings.mock_failure_rate if failure_rate is None else failure_rate
+        if canned is not None:
+            return MockBackend.from_jsonl(canned, seed=mock_seed, failure_rate=rate)
+        if pairs is not None:
+            return MockBackend.from_pairs(pairs, seed=mock_seed, failure_rate=rate)
+        raise ConfigError(
+            "the mock backend needs a canned completions file or reference completions",
+            details={"backend": name},
         )
     if name == "openai":
         key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
@@ -403,5 +425,6 @@ __all__ = [
     "Sample",
     "generate_samples",
     "make_backend",
+    "reference_completions",
     "write_samples",
 ]
