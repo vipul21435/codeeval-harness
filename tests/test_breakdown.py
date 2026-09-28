@@ -123,7 +123,7 @@ def test_demo_shaped_records_are_passes_and_fails_only(tmp_path: Path) -> None:
         ('{"task_id": "T/0"}\n', r":1: record needs a task_id string and a result string"),
         ('{"task_id": "T/0", "result": "passed"}\n[1, 2]\n', r":2: record needs task_id"),
         ('{"task_id": ["x"], "result": 5}\n', r":1: record needs a task_id string"),
-        ('{"task_id": "T/0", "result": "ok"}\n{"task_id": "T/0", "result": 5}\n', r":2: record"),
+        ('{"task_id": "T/0", "result": "passed"}\n{"result": 5}\n', r":2: record needs"),
         ('{"task_id": "T/0", "result": "crashed"}\n', r":1: unknown result string"),
         ("\n\n", "no result records"),
     ],
