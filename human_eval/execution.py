@@ -8,6 +8,12 @@ import signal
 import tempfile
 from typing import Dict, Optional
 
+# "spawn" is the default start method on macOS and Windows and the only one that
+# is safe to use from a multi-threaded parent (evaluation.py drives this module
+# from a ThreadPoolExecutor). Selecting it explicitly makes Linux behave the same
+# way instead of forking a threaded process, which CPython 3.12 warns about.
+_MP_CONTEXT = multiprocessing.get_context("spawn")
+
 
 def unsafe_execute(problem: Dict, completion: str, timeout: float, result):
     with create_tempdir():
@@ -71,22 +77,22 @@ def check_correctness(
         the results later even if execution finishes asynchronously.
     """
 
-    manager = multiprocessing.Manager()
-    result = manager.list()
+    with _MP_CONTEXT.Manager() as manager:
+        result = manager.list()
 
-    p = multiprocessing.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
-    p.start()
-    p.join(timeout=timeout + 1)
-    if p.is_alive():
-        p.kill()
+        p = _MP_CONTEXT.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
+        p.start()
+        p.join(timeout=timeout + 1)
+        if p.is_alive():
+            p.kill()
+            p.join()
 
-    if not result:
-        result.append("timed out")
+        outcome = result[0] if len(result) else "timed out"
 
     return dict(
         task_id=problem["task_id"],
-        passed=result[0] == "passed",
-        result=result[0],
+        passed=outcome == "passed",
+        result=outcome,
         completion_id=completion_id,
     )
 

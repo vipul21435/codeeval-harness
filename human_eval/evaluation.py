@@ -86,7 +86,8 @@ def evaluate_functional_correctness(
     correct = np.array(correct)
 
     ks = k
-    pass_at_k = {f"pass@{k}": estimate_pass_at_k(total, correct, k).mean()
+    # Plain floats: numpy 2 prints np.float64(...) reprs and they do not serialize.
+    pass_at_k = {f"pass@{k}": float(estimate_pass_at_k(total, correct, k).mean())
                  for k in ks if (total >= k).all()}
 
     # Finally, save the results in one file:
