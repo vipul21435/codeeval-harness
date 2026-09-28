@@ -1,0 +1,24 @@
+# `docker compose run --rm demo` builds verifybench:dev and runs the offline
+# demo; outputs land in the named volume so they survive the container.
+# `docker compose run --rm demo --help` shows the other commands.
+services:
+  demo:
+    build:
+      context: .
+    image: verifybench:dev
+    environment:
+      VERIFYBENCH_WORKERS: "4"
+      VERIFYBENCH_SAMPLE_TIMEOUT: "3.0"
+      VERIFYBENCH_LOG_FORMAT: text
+    volumes:
+      - results:/app/results
+    # The harness runs model-generated code; give the container nothing extra.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+
+volumes:
+  results:

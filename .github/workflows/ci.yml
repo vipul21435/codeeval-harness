@@ -50,3 +50,19 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: warn
+
+  docker:
+    name: docker build and demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image
+        run: docker build -t verifybench:dev .
+
+      - name: Validate the compose file
+        run: docker compose config --quiet
+
+      - name: Run the demo in the container
+        run: docker run --rm verifybench:dev demo
