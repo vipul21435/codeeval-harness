@@ -110,12 +110,22 @@ def test_all_canonical_solutions_pass_with_more_workers_than_cpus(tmp_path: Path
     )
     n_workers = max(16, 2 * (os.cpu_count() or 1))
 
-    pass_at_k = evaluate_functional_correctness(sample_file, k=[1], n_workers=n_workers)
+    # The budget only has to absorb the solutions' own run time, which the
+    # oversubscription and the coverage tracer inside every worker inflate
+    # many times over on a small CI runner; start-up is what this test pins
+    # and it is excluded by design, so the budget can be generous.
+    pass_at_k = evaluate_functional_correctness(
+        sample_file, k=[1], n_workers=n_workers, timeout=30.0
+    )
 
-    assert pass_at_k == {"pass@1": 1.0}
     results_file = sample_file.with_name(sample_file.name + "_results.jsonl")
-    not_passed = {row["task_id"]: row["result"] for row in stream_jsonl(results_file)}
-    assert {k: v for k, v in not_passed.items() if v != "passed"} == {}
+    not_passed = {
+        row["task_id"]: row["result"]
+        for row in stream_jsonl(results_file)
+        if row["result"] != "passed"
+    }
+    assert not_passed == {}
+    assert pass_at_k == {"pass@1": 1.0}
 
 
 def test_unguarded_script_can_evaluate(
