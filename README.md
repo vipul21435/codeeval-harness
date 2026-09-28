@@ -14,7 +14,7 @@ that proves every grader rejects a stub and accepts the reference, a converter
 from HumanEval problems to pytest tasks, typed settings, JSON logging, a CLI
 with an offline demo, and a digest-pinned Docker image.
 
-Status: the pieces above are implemented, tested (561 tests, 99% line and
+Status: the pieces above are implemented, tested (564 tests, 99% line and
 branch coverage) and run in CI on every push. The FastAPI service, the SQLite
 results store, the Docker sandbox grader and the submission ledger are not
 built yet; see "What I would do next". No network access and no model API key
@@ -88,6 +88,10 @@ lists the commits.
   compile-time error, recognised by its `(<string>, line N)` suffix) or
   `sandbox_error` (the worker died), counted per task and per run from a
   `*_results.jsonl` file whose malformed lines are reported by file and line.
+- **Run-to-run regression diff** (`codeeval.diff`): compares the per-task
+  pass counts of two result files and groups tasks into regressed, improved,
+  unchanged, added and removed; `RunDiff.ok` is false when any task lost a
+  pass or disappeared, so a CI gate can compare a run against a baseline.
 
 ## Architecture
 
@@ -179,6 +183,7 @@ $ uv run evaluate_functional_correctness data/example_samples.jsonl --problem_fi
 | `codeeval.backends.ModelBackend`, `MockBackend.from_jsonl(path, seed=0, failure_rate=0.0)`, `OpenAIBackend(base_url, model, api_key, timeout=60, retries=2)`, `make_backend("mock"\|"openai", canned=..., pairs=...)`, `generate_samples(backend, [(task_id, prompt), ...], n=1)`, `write_samples(path, samples)`, `reference_completions(suite)` | model backends and sample generation; `ProviderError` when a backend cannot answer, `ConfigError` for a missing key or a missing or empty canned set |
 | `codeeval.metrics.pass_at_k(n, c, k)`, `mean_pass_at_k(counts, k)`, `bootstrap_pass_at_k(counts, k, resamples=1000, confidence=0.95, seed=0)` | the unbiased pass@k estimator for one task, its mean over `(n, c)` counts, and a seeded percentile bootstrap over tasks returning `PassAtK(estimate, low, high, ...)`; `DataError` for `c > n`, `k > n`, an empty suite or a confidence outside (0, 1) |
 | `codeeval.breakdown.categorize(result)`, `breakdown(records)`, `read_results(path)` | `Category` (`pass`, `fail`, `timeout`, `syntax_error`, `sandbox_error`) for one result string, a `Breakdown` with `.run` and `.tasks` counters and `.counts()` listing every category, and the results-file loader; `DataError` names the file and line of a bad record |
+| `codeeval.diff.diff_results(before, after)` | a `RunDiff` of `TaskChange(task_id, before=(samples, passes), after=(samples, passes))` lists (`regressed`, `improved`, `unchanged`) plus `added` and `removed` task ids; `.ok` when nothing regressed or vanished |
 | `codeeval.settings.get_settings()`, `override_settings(**changes)` | typed settings, cached per process; the override is how tests pin values |
 | `codeeval.log.configure_logging()`, `bind_context(run_id=...)` | the JSON logger and its bound context |
 | `codeeval.errors.CodeEvalError` and `ConfigError`, `DataError`, `ProviderError`, `ExecutionError`, `GradingError`, `StorageError` | the exception hierarchy, one class per pipeline stage |
@@ -360,7 +365,7 @@ resample.
 | pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.5 s with 4 workers, i.e. about 80 samples/s (each in a fresh interpreter) |
 | Mock generation, 20 tasks x 4 samples | `time uv run verifybench generate --tasks data/tasks/humaneval_mini.jsonl --n 4 --failure-rate 0.25 --out results/mock/samples.jsonl` | 80 samples in 0.50 s wall-clock, interpreter start-up included |
 | Upstream evaluator on those 80 samples | `time uv run evaluate_functional_correctness results/mock/samples.jsonl --problem_file=results/demo/problems.jsonl --k=1,2,4` | 1.58 s wall-clock; pass@1 0.65, pass@2 0.883, pass@4 1.0 |
-| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 561 tests in 53 s; 99% line and branch coverage (1510 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics` and `codeeval.breakdown` at 100% |
+| Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 564 tests in 53 s; 99% line and branch coverage (1548 statements, 8 missed); `codeeval.backends`, `codeeval.demo`, `codeeval.metrics`, `codeeval.breakdown` and `codeeval.diff` at 100% |
 | Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | 22.4 s wall-clock (pip install of the locked dependencies included; Docker Desktop VM with 8 CPUs and 4 GB) |
 | Demo inside the container | `time docker run --rm verifybench:dev` | 28.8 s wall-clock, same 120 grader runs and 40 completions, inside the 4 GB Docker Desktop VM |
 
@@ -384,8 +389,8 @@ In order of value:
   `reliability_guard`.
 - **Reports and regression diffs.** Wire `codeeval.metrics` into a
   `verifybench report` command that writes a Markdown and JSONL report per
-  run (pass@k with its interval and the category breakdown per task) and
-  diffs two result files task by task to flag regressions.
+  run (pass@k with its interval, the category breakdown per task and the
+  regression diff against a baseline file) in Markdown and JSONL.
 - **SQLite results store and an LLM judge with a rubric.** Persist every run
   (`VERIFYBENCH_DB_PATH` is reserved for it), then add a rubric-driven judge
   for tasks whose correctness is not a pytest verdict, with judge outputs
