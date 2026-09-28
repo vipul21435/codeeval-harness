@@ -10,7 +10,7 @@ install:  ## Create the uv environment with dev tools and install the git hooks
 	$(UV) sync
 	$(UV) run pre-commit install
 
-demo:  ## Validate the HumanEval mini suite and score it with pass@k (offline, under a minute)
+demo:  ## Generate (mock), validate and score the HumanEval mini suite with pass@k (offline, under a minute)
 	$(UV) run python -m codeeval demo
 
 lint:  ## Lint and check formatting with ruff

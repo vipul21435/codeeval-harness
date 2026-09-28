@@ -7,11 +7,13 @@ from typing import Any
 
 import pytest
 
+from codeeval.backends import MockBackend, generate_samples
 from codeeval.demo import (
     DEFAULT_TASKS,
+    DEMO_N,
     DemoReport,
     TaskSummary,
-    demo_samples,
+    demo_canned,
     display_path,
     render_report,
     render_table,
@@ -67,13 +69,24 @@ def test_upstream_problem_requires_a_packaged_problem(make_task: Callable[..., T
         upstream_problem(make_task(), problems)
 
 
-def test_demo_samples_pair_canonical_with_stub() -> None:
+def test_demo_canned_pairs_canonical_with_stub() -> None:
     suite = TaskSuite(tasks=read_tasks(DEFAULT_TASKS).tasks[:2])
-    subset, samples = demo_samples(suite, read_problems())
+    subset, canned = demo_canned(suite, read_problems())
     assert [problem["task_id"] for problem in subset] == ["HumanEval/0", "HumanEval/1"]
-    assert [sample["task_id"] for sample in samples] == ["HumanEval/0"] * 2 + ["HumanEval/1"] * 2
-    assert samples[0]["completion"] == subset[0]["canonical_solution"]
-    assert samples[1]["completion"] == "    raise NotImplementedError\n"
+    assert [task_id for task_id, _ in canned] == ["HumanEval/0"] * 2 + ["HumanEval/1"] * 2
+    assert canned[0][1] == subset[0]["canonical_solution"]
+    assert canned[1][1] == "    raise NotImplementedError\n"
+
+
+def test_demo_mock_generates_canonical_then_stub() -> None:
+    suite = TaskSuite(tasks=read_tasks(DEFAULT_TASKS).tasks[:1])
+    subset, canned = demo_canned(suite, read_problems())
+    backend = MockBackend.from_pairs(canned)
+    samples = generate_samples(backend, [(subset[0]["task_id"], subset[0]["prompt"])], n=DEMO_N)
+    assert [sample.completion for sample in samples] == [
+        subset[0]["canonical_solution"],
+        "    raise NotImplementedError\n",
+    ]
 
 
 def _verdicts(*ids: str) -> SuiteVerdict:
@@ -105,6 +118,9 @@ def _report(rows: list[TaskSummary]) -> DemoReport:
     return DemoReport(
         tasks_file="tasks.jsonl",
         n_tasks=len(rows),
+        backend="mock",
+        generation_seconds=0.01,
+        samples_file="results/demo/samples.jsonl",
         repeats=1,
         workers=2,
         sample_timeout=3.0,
@@ -136,7 +152,10 @@ def _row(**overrides: Any) -> TaskSummary:
 
 def test_render_report_ok() -> None:
     text = render_report(_report([_row()]))
-    assert "1 tasks x 2 solutions x 1 repeat = 2 grader runs" in text
+    assert "[1/3] generation: 2 completions from the mock backend" in text
+    assert "results/demo/samples.jsonl in 0.0s" in text
+    assert "[2/3] fail-to-pass validation: 1 tasks x 2 solutions x 1 repeat = 2 grader runs" in text
+    assert "[3/3] pass@k evaluation: 2 completions" in text
     assert "pass@1=0.500 pass@2=1.000" in text
     assert "verdict: OK" in text
     assert table_rows([_row()])[0][-1] == "failed"
@@ -170,7 +189,18 @@ def test_run_demo_end_to_end(tmp_path: Path) -> None:
     assert report.n_tasks == 2
     assert report.grader_runs == 4
     assert report.n_samples == 4
+    assert report.backend == "mock"
+    assert report.generation_seconds >= 0
     assert report.pass_at_k == pytest.approx({"pass@1": 0.5, "pass@2": 1.0})
+    samples = [
+        json.loads(line) for line in (tmp_path / "demo" / "samples.jsonl").read_text().splitlines()
+    ]
+    assert [(sample["task_id"], sample["backend"], sample["index"]) for sample in samples] == [
+        ("HumanEval/0", "mock", 0),
+        ("HumanEval/0", "mock", 1),
+        ("HumanEval/1", "mock", 0),
+        ("HumanEval/1", "mock", 1),
+    ]
     assert report.verdict_counts["ok"] == 2
     assert [row.task_id for row in report.rows] == ["HumanEval/0", "HumanEval/1"]
     assert Path(report.results_file).is_file()

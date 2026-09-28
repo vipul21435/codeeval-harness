@@ -1,14 +1,19 @@
-"""End-to-end demo: validate a task suite, then score completions on it with pass@k.
+"""End-to-end demo: generate samples, validate the task suite, score with pass@k.
 
 :func:`run_demo` is what ``make demo`` and ``python -m codeeval demo`` run.
-It needs no network and no model: for every task of a suite ported from
-HumanEval it validates the pytest grader with :mod:`codeeval.f2p` (the
-baseline stub must fail, the reference must pass), then hands two completions
-per task to the upstream pass@k evaluator, the canonical solution and the
-same ``NotImplementedError`` stub, so the expected result is known up front:
-every canonical completion passes, every stub fails, pass@1 is 0.5 and
-pass@2 is 1.0. Anything else is a bug in the harness and the demo exits with
-status 1.
+It needs no network and no model. For a suite ported from HumanEval it
+
+1. generates two completions per task with the :class:`MockBackend` of
+   :mod:`codeeval.backends`, canned from the upstream canonical solution and
+   a ``NotImplementedError`` stub, through the same :func:`generate_samples`
+   path ``verifybench generate`` uses;
+2. validates every pytest grader with :mod:`codeeval.f2p` (the baseline stub
+   must fail, the reference must pass, repeatedly);
+3. hands the samples to the upstream pass@k evaluator.
+
+The expected result is known up front: every canonical completion passes,
+every stub fails, pass@1 is 0.5 and pass@2 is 1.0. Anything else is a bug in
+the harness and the demo exits with status 1.
 
 Samples, the problem subset and the evaluator's results file are written
 under ``<results_dir>/demo`` (``VERIFYBENCH_RESULTS_DIR``, ``results`` by
@@ -26,6 +31,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from codeeval.backends import MockBackend, generate_samples, write_samples
 from codeeval.convert import STUB_STATEMENT, body_indent
 from codeeval.errors import DataError
 from codeeval.f2p import DEFAULT_TIMEOUT, SuiteVerdict, Verdict, validate_suite
@@ -40,6 +46,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TASKS = REPO_ROOT / "data" / "tasks" / "humaneval_mini.jsonl"
 DEFAULT_REPEATS = 3
 DEMO_KS = (1, 2)
+DEMO_N = 2  # completions per task: the canonical solution, then the stub
 
 Row = tuple[str, ...]
 
@@ -74,6 +81,9 @@ class DemoReport(BaseModel):
 
     tasks_file: str
     n_tasks: int
+    backend: str
+    generation_seconds: float
+    samples_file: str
     repeats: int
     workers: int
     sample_timeout: float
@@ -103,24 +113,19 @@ def upstream_problem(task: Task, problems: Mapping[str, Mapping[str, Any]]) -> M
     return problems[upstream_id]
 
 
-def demo_samples(
+def demo_canned(
     suite: TaskSuite, problems: Mapping[str, Mapping[str, Any]]
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """The problem subset and the samples (canonical, then stub, per task) the demo scores."""
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """The problem subset and the mock's canned completions (canonical, then stub, per task)."""
     subset: list[dict[str, Any]] = []
-    samples: list[dict[str, Any]] = []
+    canned: list[tuple[str, str]] = []
     for task in suite.tasks:
         problem = dict(upstream_problem(task, problems))
         canonical = problem["canonical_solution"]
         subset.append(problem)
-        samples.append({"task_id": problem["task_id"], "completion": canonical})
-        samples.append(
-            {
-                "task_id": problem["task_id"],
-                "completion": f"{body_indent(canonical)}{STUB_STATEMENT}\n",
-            }
-        )
-    return subset, samples
+        canned.append((problem["task_id"], canonical))
+        canned.append((problem["task_id"], f"{body_indent(canonical)}{STUB_STATEMENT}\n"))
+    return subset, canned
 
 
 def summarise(
@@ -220,7 +225,13 @@ def render_report(report: DemoReport) -> str:
         f"VerifyBench demo: {report.tasks_file} ({report.n_tasks} tasks)",
         "",
         (
-            f"[1/2] fail-to-pass validation: {report.n_tasks} tasks x 2 solutions x "
+            f"[1/3] generation: {report.n_samples} completions from the {report.backend} "
+            f"backend ({DEMO_N} per task: canonical solution, then NotImplementedError stub)"
+        ),
+        f"      {report.samples_file} in {report.generation_seconds:.1f}s",
+        "",
+        (
+            f"[2/3] fail-to-pass validation: {report.n_tasks} tasks x 2 solutions x "
             f"{report.repeats} {'repeat' if report.repeats == 1 else 'repeats'} = "
             f"{report.grader_runs} grader runs, "
             f"{report.workers} workers, {report.grader_timeout:g}s timeout each"
@@ -228,8 +239,7 @@ def render_report(report: DemoReport) -> str:
         f"      {counts} in {report.validation_seconds:.1f}s",
         "",
         (
-            f"[2/2] pass@k evaluation: {report.n_samples} completions "
-            "(canonical solution + NotImplementedError stub per task), "
+            f"[3/3] pass@k evaluation: {report.n_samples} completions, "
             f"{report.workers} workers, {report.sample_timeout:g}s timeout each"
         ),
         f"      {pass_at_k} in {report.evaluation_seconds:.1f}s",
@@ -285,16 +295,22 @@ def run_demo(
         suite = TaskSuite(tasks=suite.tasks[:limit])
     if not suite.tasks:
         raise DataError(f"{os.fspath(tasks_file)} holds no tasks", details={"path": tasks_file})
-    subset, samples = demo_samples(suite, read_problems())
+    subset, canned = demo_canned(suite, read_problems())
+
+    problem_file = out_dir / "problems.jsonl"
+    sample_file = out_dir / "samples.jsonl"
+    write_jsonl(problem_file, subset)
+    backend = MockBackend.from_pairs(canned, seed=settings.seed)
+    started = time.monotonic()
+    prompts = [(problem["task_id"], problem["prompt"]) for problem in subset]
+    samples = generate_samples(backend, prompts, n=DEMO_N)
+    write_samples(sample_file, samples)
+    generation_seconds = time.monotonic() - started
 
     started = time.monotonic()
     verdicts = validate_suite(suite, repeats=repeats, timeout=grader_timeout, workers=workers)
     validation_seconds = time.monotonic() - started
 
-    problem_file = out_dir / "problems.jsonl"
-    sample_file = out_dir / "samples.jsonl"
-    write_jsonl(problem_file, subset)
-    write_jsonl(sample_file, samples)
     started = time.monotonic()
     pass_at_k = evaluate_functional_correctness(
         sample_file, DEMO_KS, workers, sample_timeout, problem_file
@@ -306,6 +322,9 @@ def run_demo(
     report = DemoReport(
         tasks_file=display_path(tasks_file),
         n_tasks=len(suite),
+        backend=backend.name,
+        generation_seconds=generation_seconds,
+        samples_file=display_path(sample_file),
         repeats=repeats,
         workers=workers,
         sample_timeout=sample_timeout,
@@ -329,6 +348,7 @@ def run_demo(
             "n_tasks": report.n_tasks,
             "ok": report.ok,
             "pass_at_k": pass_at_k,
+            "generation_seconds": round(generation_seconds, 3),
             "validation_seconds": round(validation_seconds, 3),
             "evaluation_seconds": round(evaluation_seconds, 3),
         },
@@ -340,10 +360,11 @@ __all__ = [
     "DEFAULT_REPEATS",
     "DEFAULT_TASKS",
     "DEMO_KS",
+    "DEMO_N",
     "TABLE_HEADERS",
     "DemoReport",
     "TaskSummary",
-    "demo_samples",
+    "demo_canned",
     "display_path",
     "render_report",
     "render_table",
