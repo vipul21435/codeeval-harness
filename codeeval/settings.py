@@ -26,7 +26,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from codeeval.errors import ConfigError
@@ -37,6 +37,7 @@ DEFAULT_ENV_FILE = ".env"
 SandboxBackend = Literal["subprocess", "docker"]
 LogFormat = Literal["json", "text"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+ModelBackendName = Literal["mock", "openai"]
 
 
 class Settings(BaseSettings):
@@ -77,6 +78,31 @@ class Settings(BaseSettings):
     log_format: LogFormat = Field(default="json", description="Log record format: json or text.")
     log_level: LogLevel = Field(default="INFO", description="Least severe log level emitted.")
     seed: int = Field(default=0, description="Seed for everything randomised (sampling, stubs).")
+    model_backend: ModelBackendName = Field(
+        default="mock", description="Where completions come from: the offline mock or openai."
+    )
+    mock_failure_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of mock completions replaced by a NotImplementedError stub.",
+    )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL of an OpenAI-compatible chat completions API.",
+    )
+    openai_model: str = Field(
+        default="gpt-4o-mini", description="Model name sent to the OpenAI-compatible API."
+    )
+    openai_api_key: SecretStr | None = Field(
+        default=None, description="API key; the openai backend refuses to start without one."
+    )
+    openai_timeout: float = Field(
+        default=60.0, gt=0, description="Seconds one HTTP request to the model API may take."
+    )
+    openai_retries: int = Field(
+        default=2, ge=0, description="Retries after a transport error, HTTP 429 or 5xx."
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -175,6 +201,7 @@ __all__ = [
     "ENV_PREFIX",
     "LogFormat",
     "LogLevel",
+    "ModelBackendName",
     "SandboxBackend",
     "Settings",
     "clear_settings_cache",

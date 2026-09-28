@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from codeeval.errors import ConfigError
 from codeeval.settings import (
@@ -48,6 +48,13 @@ def test_defaults_reproduce_the_upstream_evaluator() -> None:
         "log_format": "json",
         "log_level": "INFO",
         "seed": 0,
+        "model_backend": "mock",
+        "mock_failure_rate": 0.0,
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_model": "gpt-4o-mini",
+        "openai_api_key": None,
+        "openai_timeout": 60.0,
+        "openai_retries": 2,
     }
 
 
@@ -62,6 +69,13 @@ def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("VERIFYBENCH_LOG_FORMAT", "text")
     monkeypatch.setenv("VERIFYBENCH_LOG_LEVEL", "debug")
     monkeypatch.setenv("VERIFYBENCH_SEED", "42")
+    monkeypatch.setenv("VERIFYBENCH_MODEL_BACKEND", "openai")
+    monkeypatch.setenv("VERIFYBENCH_MOCK_FAILURE_RATE", "0.25")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_BASE_URL", "http://localhost:8000/v1")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_MODEL", "local-model")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_API_KEY", "sk-env")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_TIMEOUT", "5")
+    monkeypatch.setenv("VERIFYBENCH_OPENAI_RETRIES", "0")
 
     settings = load_settings()
 
@@ -75,6 +89,13 @@ def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch
         "log_format": "text",
         "log_level": "DEBUG",
         "seed": 42,
+        "model_backend": "openai",
+        "mock_failure_rate": 0.25,
+        "openai_base_url": "http://localhost:8000/v1",
+        "openai_model": "local-model",
+        "openai_api_key": SecretStr("sk-env"),
+        "openai_timeout": 5.0,
+        "openai_retries": 0,
     }
 
 
