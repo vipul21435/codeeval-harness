@@ -1,6 +1,7 @@
+import copy
 import os
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -8,11 +9,31 @@ from typing import Any
 import pytest
 
 from codeeval.settings import ENV_PREFIX, clear_settings_cache
+from codeeval.tasks import Task
 from human_eval import evaluation
 from human_eval.data import read_problems
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
+TASKS_DIR = DATA_DIR / "tasks"
+
+# A minimal valid task: every field a test may want to override is spelled out.
+SYNTHETIC_TASK: dict[str, Any] = {
+    "task_id": "synthetic/add",
+    "prompt": 'def add(a: int, b: int) -> int:\n    """Return the sum of a and b."""\n',
+    "entry_point": "add",
+    "reference_solution": "def add(a: int, b: int) -> int:\n    return a + b\n",
+    "baseline_solution": "def add(a: int, b: int) -> int:\n    raise NotImplementedError\n",
+    "tests": (
+        "from solution import add\n\n\n"
+        "def test_add() -> None:\n"
+        "    assert add(2, 3) == 5\n"
+        "    assert add(-1, 1) == 0\n"
+    ),
+    "language": "python",
+    "difficulty": "easy",
+    "metadata": {"source": "synthetic"},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -75,3 +96,19 @@ def stubbed_evaluation(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setattr(evaluation, "check_correctness", fake_check)
     monkeypatch.setattr(evaluation, "ThreadPoolExecutor", RecordingExecutor)
     return seen
+
+
+@pytest.fixture
+def task_record() -> dict[str, Any]:
+    """A fresh copy of the minimal valid task record."""
+    return copy.deepcopy(SYNTHETIC_TASK)
+
+
+@pytest.fixture
+def make_task() -> Callable[..., Task]:
+    """Factory for valid tasks: ``make_task(task_id="x/y", tests=...)`` overrides fields."""
+
+    def factory(**overrides: Any) -> Task:
+        return Task.model_validate({**SYNTHETIC_TASK, **overrides})
+
+    return factory
