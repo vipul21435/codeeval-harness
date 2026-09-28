@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 UV ?= uv
 
-.PHONY: help install lint format typecheck test test-fast coverage check clean
+.PHONY: help install lint format typecheck test test-fast coverage check ci clean
 
 help:  ## Show the available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -30,7 +30,14 @@ test-fast:  ## Run only the tests that do not spawn subprocesses
 coverage:  ## Run the tests with branch coverage
 	$(UV) run pytest -q --cov --cov-report=term-missing
 
-check: lint typecheck test  ## Everything CI runs: lint, typecheck, test
+check: lint typecheck test  ## Lint, typecheck and test the current environment
+
+ci:  ## Exactly what .github/workflows/ci.yml runs: sync, lint, typecheck, test with coverage
+	$(UV) sync --all-extras --dev
+	$(UV) run ruff check .
+	$(UV) run ruff format --check .
+	$(UV) run mypy
+	$(UV) run pytest -q --cov=codeeval --cov=human_eval --cov-report=xml --cov-report=term-missing
 
 clean:  ## Remove caches and build artifacts
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage .coverage.* htmlcov dist build

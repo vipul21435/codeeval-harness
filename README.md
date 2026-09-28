@@ -2,6 +2,8 @@ Forked from https://github.com/openai/human-eval.
 
 # verifybench
 
+[![CI](https://github.com/vipul21435/verifybench/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/vipul21435/verifybench/actions/workflows/ci.yml)
+
 VerifyBench is an evaluation harness for LLM-generated code, built on OpenAI's
 [human-eval](https://github.com/openai/human-eval): the HumanEval dataset and
 the pass@k evaluator from the paper "[Evaluating Large Language Models Trained
@@ -56,6 +58,10 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
   with `timestamp`, `level`, `logger`, `message` and extras such as `run_id`
   and `task_id`, a plain text fallback, and `bind_context()` to stamp a block
   of records; the CLI configures it from the settings.
+- A GitHub Actions workflow (`.github/workflows/ci.yml`) that runs ruff,
+  `ruff format --check`, `mypy --strict` and pytest with coverage on every
+  push and pull request to `master`, uploads `coverage.xml` as an artifact
+  and cancels superseded runs; `make ci` runs the same commands locally.
 
 ## Installation
 
@@ -197,6 +203,7 @@ with bind_context(run_id="run-42"):
 
 ```
 $ make check        # ruff check, ruff format --check, mypy --strict, pytest
+$ make ci           # the CI workflow's exact commands, coverage.xml included
 $ make test-fast    # skip the tests that spawn subprocesses
 $ make coverage     # pytest with branch coverage
 $ make format       # auto-fix lint findings and reformat
