@@ -10,6 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import tqdm
 
+from codeeval.settings import get_settings
 from human_eval.data import HUMAN_EVAL, PathLike, read_problems, stream_jsonl, write_jsonl
 from human_eval.execution import check_correctness
 
@@ -51,14 +52,23 @@ def estimate_pass_at_k(
 def evaluate_functional_correctness(
     sample_file: PathLike,
     k: Sequence[int] = (1, 10, 100),
-    n_workers: int = 4,
-    timeout: float = 3.0,
+    n_workers: int | None = None,
+    timeout: float | None = None,
     problem_file: PathLike = HUMAN_EVAL,
 ) -> dict[str, float]:
     """
     Evaluates the functional correctness of generated samples, and writes
     results to f"{sample_file}_results.jsonl"
+
+    ``n_workers`` and ``timeout`` default to the ``VERIFYBENCH_WORKERS`` and
+    ``VERIFYBENCH_SAMPLE_TIMEOUT`` settings (4 and 3.0 seconds unless
+    configured; see ``codeeval.settings``).
     """
+    settings = get_settings()
+    if n_workers is None:
+        n_workers = settings.workers
+    if timeout is None:
+        timeout = settings.sample_timeout
 
     problems = read_problems(problem_file)
 

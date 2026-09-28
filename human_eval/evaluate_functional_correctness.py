@@ -32,13 +32,16 @@ def parse_k(k: str | int | Sequence[int]) -> list[int]:
 def entry_point(
     sample_file: str,
     k: str | int | Sequence[int] = "1,10,100",
-    n_workers: int = 4,
-    timeout: float = 3.0,
+    n_workers: int | None = None,
+    timeout: float | None = None,
     problem_file: str = HUMAN_EVAL,
 ) -> None:
     """
     Evaluates the functional correctness of generated samples, and writes
     results to f"{sample_file}_results.jsonl"
+
+    ``--n_workers`` and ``--timeout`` default to the ``VERIFYBENCH_WORKERS``
+    and ``VERIFYBENCH_SAMPLE_TIMEOUT`` settings (4 and 3.0 seconds).
     """
     results = evaluate_functional_correctness(
         sample_file, parse_k(k), n_workers, timeout, problem_file

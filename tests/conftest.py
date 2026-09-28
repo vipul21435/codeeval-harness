@@ -1,13 +1,27 @@
+import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from codeeval.settings import ENV_PREFIX, clear_settings_cache
 from human_eval.data import read_problems
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the developer's VERIFYBENCH_* variables and cached settings out of every test."""
+    for name in list(os.environ):
+        if name.upper().startswith(ENV_PREFIX):
+            monkeypatch.delenv(name)
+    clear_settings_cache()
+    yield
+    clear_settings_cache()
 
 
 @pytest.fixture

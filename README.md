@@ -48,6 +48,10 @@ semantics. This fork modernizes the packaging and tooling around it and grows a
   `pip install .`.
 - Strictly typed (`mypy --strict`), linted and formatted with ruff, and covered
   by a pytest suite that reproduces the documented example numbers.
+- Typed settings (`codeeval.settings`): every knob is a `VERIFYBENCH_*`
+  environment variable or `.env` entry, validated up front by pydantic-settings
+  with a `ConfigError` that names the offending variable; the evaluator's
+  `--n_workers` and `--timeout` default to them.
 
 ## Installation
 
@@ -137,6 +141,31 @@ There is no unbiased estimate of pass@k with fewer than k samples per task, so
 such k are skipped. See `uv run evaluate_functional_correctness --help` for the
 remaining options (`--n_workers`, `--timeout`, `--problem_file`).
 
+## Configuration
+
+Every setting is a field of `codeeval.settings.Settings`. Set it with a
+`VERIFYBENCH_<NAME>` environment variable or with the same key in a `.env`
+file in the working directory (`.env.example` lists them all). An environment
+variable beats a `.env` entry, which beats the default:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `VERIFYBENCH_SANDBOX_BACKEND` | `subprocess` | where generated code runs: `subprocess` or `docker` |
+| `VERIFYBENCH_SAMPLE_TIMEOUT` | `3.0` | seconds one sample may run before it is graded as timed out |
+| `VERIFYBENCH_WORKERS` | `4` | samples executed concurrently |
+| `VERIFYBENCH_DOCKER_IMAGE` | `python:3.12-slim` | image reference (tag or digest) for the docker backend |
+| `VERIFYBENCH_RESULTS_DIR` | `results` | directory that receives run outputs |
+| `VERIFYBENCH_DB_PATH` | `results/verifybench.sqlite` | SQLite results store |
+| `VERIFYBENCH_LOG_FORMAT` | `json` | log record format: `json` or `text` |
+| `VERIFYBENCH_LOG_LEVEL` | `INFO` | least severe log level emitted |
+| `VERIFYBENCH_SEED` | `0` | seed for everything randomised |
+
+Bad values fail fast: `get_settings()` raises `codeeval.errors.ConfigError`
+naming each offending variable. It loads the settings once per process;
+`override_settings(workers=1)` swaps them inside a `with` block, which is how
+the tests pin a configuration. `evaluate_functional_correctness` reads
+`--n_workers` and `--timeout` from the settings when they are not given.
+
 ## Development
 
 ```
@@ -151,13 +180,13 @@ Layout:
 - `human_eval/` - the upstream package: dataset loading (with
   `HumanEval.jsonl.gz` in `human_eval/data/`), per-sample execution, the
   pass@k estimator and the `evaluate_functional_correctness` CLI.
-- `codeeval/` - the harness package (currently the version only; modules land
-  slice by slice).
+- `codeeval/` - the harness package: `errors` (the exception hierarchy) and
+  `settings` (typed configuration); further modules land slice by slice.
 - `data/` - the example problem and samples used in this README and the tests.
 - `tests/` - pytest suite; tests marked `slow` spawn worker processes.
 
-Copy `.env.example` to `.env` if you want to configure a hosted model provider
-later; nothing in the repository needs credentials.
+Copy `.env.example` to `.env` to change settings locally (see Configuration);
+nothing in the repository needs credentials.
 
 ## Known Issues
 
