@@ -23,7 +23,7 @@ from pathlib import Path
 
 from codeeval import __version__
 from codeeval.backends import BACKEND_NAMES
-from codeeval.errors import CodeEvalError
+from codeeval.errors import CodeEvalError, DataError
 from codeeval.log import bind_context, configure_logging
 
 PROG = "verifybench"
@@ -185,6 +185,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
     from codeeval.tasks import TaskSuite, read_tasks
 
     suite = read_tasks(args.tasks)
+    if not suite.tasks:
+        raise DataError(f"{args.tasks} holds no tasks", details={"path": args.tasks})
     if args.limit is not None:
         suite = TaskSuite(tasks=suite.tasks[: args.limit])
     name = args.backend if args.backend is not None else get_settings().model_backend

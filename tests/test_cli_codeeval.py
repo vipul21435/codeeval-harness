@@ -243,6 +243,19 @@ def test_generate_unknown_canned_task_is_a_provider_error(
     assert "ProviderError" in capsys.readouterr().err
 
 
+def test_generate_empty_task_file_is_a_data_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tasks = tmp_path / "empty.jsonl"
+    tasks.write_text("", encoding="utf-8")
+    out = tmp_path / "samples.jsonl"
+    assert main(["generate", "--tasks", str(tasks), "--out", str(out)]) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert "DataError" in err
+    assert "holds no tasks" in err
+    assert not out.exists()
+
+
 @pytest.mark.parametrize("value", ["0", "-3"])
 def test_generate_rejects_non_positive_n(value: str, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as info:
