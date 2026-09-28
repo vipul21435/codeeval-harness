@@ -24,7 +24,7 @@ jobs:
 
       # Installs uv and the Python version named in .python-version; the uv
       # cache is keyed on uv.lock so an unchanged lock reuses the environment.
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
