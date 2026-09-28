@@ -298,8 +298,8 @@ resample.
 | Fail-to-pass validation inside the demo | part of `make demo` | 120 grader runs (20 tasks x 2 solutions x 3 repeats) in 6.9 s with 4 workers, i.e. about 17 pytest runs/s |
 | pass@k evaluation inside the demo | part of `make demo` | 40 completions in 0.4 s with 4 workers, i.e. about 100 samples/s (each in a fresh interpreter) |
 | Test suite with coverage | `uv run pytest -q --cov=codeeval --cov=human_eval` | 465 tests in 46.3 s; 99% line and branch coverage (1137 statements, 8 missed) |
-| Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | DOCKER_BUILD_TIME |
-| Demo inside the container | `time docker run --rm verifybench:dev` | DOCKER_DEMO_TIME |
+| Docker image build from a clean cache | `time docker build --no-cache -t verifybench:dev .` | 22.4 s wall-clock (pip install of the locked dependencies included; Docker Desktop VM with 8 CPUs and 4 GB) |
+| Demo inside the container | `time docker run --rm verifybench:dev` | 28.8 s wall-clock, same 120 grader runs and 40 completions, inside the 4 GB Docker Desktop VM |
 
 The task suite is small on purpose: 20 tasks make the demo quick and the
 output readable. `verifybench convert all.jsonl --limit 0` ports all 164
